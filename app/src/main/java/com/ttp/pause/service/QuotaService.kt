@@ -30,6 +30,11 @@ import com.ttp.pause.ui.OverlayManager
  */
 class QuotaService : Service() {
 
+    companion object {
+        /** Activity 可通过此引用直接调用 Service 方法 */
+        var currentInstance: QuotaService? = null
+    }
+
     private val engine = QuotaEngine()
 
     private lateinit var quotaStore: QuotaStore
@@ -45,8 +50,23 @@ class QuotaService : Service() {
         }
     }
 
+    // 每秒心跳 tick：推动悬浮球连续动画（即使额度未变化）
+    private val heartbeatRunnable = object : Runnable {
+        override fun run() {
+            if (!quotaStore.isInGracePeriod()) {
+                overlayManager.update(
+                    quota = quotaStore.quota,
+                    isWatching = appDetector.isWatchingShortVideo(),
+                    inGracePeriod = false
+                )
+            }
+            handler.postDelayed(this, 1000L)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
+        currentInstance = this
         quotaStore = QuotaStore(this)
         appDetector = AppDetector(this)
         notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
@@ -54,11 +74,10 @@ class QuotaService : Service() {
         // 初始化悬浮窗管理器
         overlayManager = OverlayManager(this)
         overlayManager.onGraceGranted = {
-            // 宽限验证成功 → 开启宽限计时 + 隐藏所有悬浮 UI
+            // 宽限验证成功 → 开启宽限计时
             quotaStore.startGrace()
             overlayManager.removeGraceDialog()
             overlayManager.hideInterventionOverlay()
-            overlayManager.removeFloatBall()
             updateNotification()
         }
 
@@ -68,15 +87,24 @@ class QuotaService : Service() {
         // 回溯恢复：处理 Service 被杀期间的时间
         catchUpRecovery()
 
-        // 启动 tick 循环
+        // 启动 tick 循环 + 心跳
         handler.post(tickRunnable)
+        handler.post(heartbeatRunnable)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 每次 Activity 启动 Service 时，重新检查蒙层状态
+        handler.post { checkAndApplyOverlay() }
+        return START_STICKY
+    }
+
     override fun onDestroy() {
         handler.removeCallbacks(tickRunnable)
+        handler.removeCallbacks(heartbeatRunnable)
         overlayManager.release()
+        currentInstance = null
         super.onDestroy()
     }
 
@@ -111,7 +139,7 @@ class QuotaService : Service() {
             }
             quotaStore.lastTickTime = now
             updateNotification()
-            // 宽限期间隐藏所有悬浮 UI（通知栏显示倒计时）
+            // 宽限期间显示悬浮球，隐藏蒙层
             overlayManager.update(
                 quota = newQuota,
                 isWatching = false,
@@ -174,5 +202,31 @@ class QuotaService : Service() {
 
     private fun updateNotification() {
         notificationManager.notify(Constants.NOTIFICATION_ID, buildNotification())
+    }
+
+    /**
+     * 供 Activity 恢复时调用：强制重新评估并显示蒙层
+     * 用于"退出 App 再回来，若额度为 0 则继续显示蒙层"
+     */
+    fun checkAndApplyOverlay() {
+        if (quotaStore.isInGracePeriod()) {
+            overlayManager.update(
+                quota = quotaStore.quota,
+                isWatching = true,
+                inGracePeriod = true
+            )
+        } else if (quotaStore.quota <= Constants.QUOTA_MIN) {
+            overlayManager.update(
+                quota = 0,
+                isWatching = true,
+                inGracePeriod = false
+            )
+        } else {
+            overlayManager.update(
+                quota = quotaStore.quota,
+                isWatching = true,
+                inGracePeriod = false
+            )
+        }
     }
 }

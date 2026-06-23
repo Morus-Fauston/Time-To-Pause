@@ -89,6 +89,16 @@ class MainActivity : AppCompatActivity() {
         dashboardGraceInfo = findViewById(R.id.dashboardGraceInfo)
         btnSettings = findViewById(R.id.btnSettings)
 
+        // !!! 必须先设置点击事件，再判断是否返回 !!!
+        // 设置按钮 → 设置弹窗
+        btnSettings.setOnClickListener {
+            showSettingsDialog()
+        }
+        btnStart.setOnClickListener {
+            handler.removeCallbacks(demoAnim)
+            startPermissionGuide()
+        }
+
         // 判断是否已经设置过 → 直接进入仪表盘
         if (hasCompletedSetup()) {
             showDashboard()
@@ -99,16 +109,6 @@ class MainActivity : AppCompatActivity() {
         welcomeContainer.visibility = android.view.View.VISIBLE
         dashboardContainer.visibility = android.view.View.GONE
         handler.post(demoAnim)
-
-        btnStart.setOnClickListener {
-            handler.removeCallbacks(demoAnim)
-            startPermissionGuide()
-        }
-
-        // 设置按钮 → 设置弹窗
-        btnSettings.setOnClickListener {
-            showSettingsDialog()
-        }
     }
 
     override fun onResume() {
@@ -123,9 +123,16 @@ class MainActivity : AppCompatActivity() {
             val prefs = getSharedPreferences(Constants.PREF_NAME, Context.MODE_PRIVATE)
             prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         }
-        // 每次回到前台刷新仪表盘
+        // 每次回到前台刷新仪表盘 + 通知 Service 检查蒙层
         if (dashboardContainer.visibility == android.view.View.VISIBLE) {
             updateDashboardQuota()
+            // 确保 Service 运行
+            try {
+                val intent = Intent(this, QuotaService::class.java)
+                startService(intent)
+            } catch (_: Exception) {}
+            // 直接调用 Service 的检查方法（比 onStartCommand 更可靠）
+            QuotaService.currentInstance?.checkAndApplyOverlay()
         }
     }
 
@@ -203,7 +210,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 显示简单设置弹窗 */
     private fun showSettingsDialog() {
-        val items = arrayOf("重新引导权限", "关闭应用")
+        val items = arrayOf("重新引导权限", "调试模式", "关闭应用")
         AlertDialog.Builder(this)
             .setTitle("设置")
             .setItems(items) { _, which ->
@@ -215,6 +222,10 @@ class MainActivity : AppCompatActivity() {
                         startPermissionGuide()
                     }
                     1 -> {
+                        // 调试模式
+                        startActivity(Intent(this, com.ttp.pause.ui.DebugActivity::class.java))
+                    }
+                    2 -> {
                         // 关闭应用
                         stopService(Intent(this, QuotaService::class.java))
                         finishAffinity()

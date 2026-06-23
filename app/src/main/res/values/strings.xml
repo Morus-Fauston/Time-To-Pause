@@ -31,4 +31,5 @@
     <string name="dashboard_status_active">监控中…</string>
     <string name="btn_cancel">取消</string>
     <string name="grace_dialog_cancel">关闭</string>
+    <string name="overlay_dismiss">返回</string>
 </resources>

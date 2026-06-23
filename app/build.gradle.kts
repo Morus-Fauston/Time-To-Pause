@@ -12,7 +12,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0.0"
+        versionName = "0.1.2"
     }
 
     buildTypes {
@@ -36,6 +36,16 @@ android {
 
     buildFeatures {
         viewBinding = true
+    }
+
+    // APK 输出命名: TTP.版本号.apk
+    android.applicationVariants.all {
+        val variant = this
+        variant.outputs
+            .map { it as com.android.build.gradle.internal.api.BaseVariantOutputImpl }
+            .forEach { output ->
+                output.outputFileName = "TTP.${variant.versionName}.apk"
+            }
     }
 }
 

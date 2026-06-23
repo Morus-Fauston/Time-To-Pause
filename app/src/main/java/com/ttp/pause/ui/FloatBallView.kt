@@ -6,6 +6,8 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.os.Handler
+import android.os.Looper
 import android.view.MotionEvent
 import android.view.View
 import com.ttp.pause.Constants
@@ -16,11 +18,12 @@ import kotlin.math.min
  * 悬浮球自定义 View
  *
  * 设计：
- * - 圆形，约 80dp
+ * - 圆形，约 52dp
  * - 外圈 10 段弧形进度条（每消耗 10 点熄灭一段）
  * - 中央显示剩余额度数字
  * - 可拖动
  * - 单击触发宽限
+ * - 连续平滑动画：额度值始终以缓慢速度向目标靠拢，模拟时钟流逝感
  */
 class FloatBallView(context: Context) : View(context) {
 
@@ -28,7 +31,7 @@ class FloatBallView(context: Context) : View(context) {
     private val defaultSize = resources.displayMetrics.density * 52f // 52dp
     private val ringThicknessRatio = 0.28f
     private val segmentCount = 10
-    private val segmentSweepAngle = 34f // (360 / 10) - 2° gap
+    private val segmentSweepAngle = 34f
     private val segmentGapAngle = 2f
 
     // ---- 触摸 ----
@@ -37,9 +40,25 @@ class FloatBallView(context: Context) : View(context) {
     private var initialParamsX = 0
     private var initialParamsY = 0
     private var isDragging = false
-    private val touchSlop = 8 // dp, 低于此值视为单击
+    private val touchSlop = 8
 
     private var _quota = Constants.QUOTA_MAX
+
+    // ---- 连续平滑动画 ----
+    /** 当前实际显示值（连续浮点，平滑变化） */
+    private var _displayValue = Constants.QUOTA_MAX.toFloat()
+    /** 追赶速度：每秒变化的百分比点数 */
+    private val chaseSpeed = 3.5f // 约 3.5 点/秒 → 30 点约 8.5 秒走完
+    /** 动画循环（每帧 16ms 约 60fps） */
+    private val animHandler = Handler(Looper.getMainLooper())
+    private val animRunnable = object : Runnable {
+        override fun run() {
+            tickAnimation()
+            animHandler.postDelayed(this, 16L)
+        }
+    }
+    /** 时间戳，用于脉动效果 */
+    private var animStartTime = System.currentTimeMillis()
 
     // ---- 回调 ----
     var onGraceRequested: (() -> Unit)? = null
@@ -48,10 +67,6 @@ class FloatBallView(context: Context) : View(context) {
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         setShadowLayer(12f, 0f, 4f, 0x40000000.toInt())
-    }
-
-    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
     }
 
     private val centerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -81,22 +96,59 @@ class FloatBallView(context: Context) : View(context) {
     }
 
     init {
-        // 点击/触控需自行处理
         setOnClickListener(null)
+        animHandler.post(animRunnable)
     }
 
     // =========================================================
     // Public API
     // =========================================================
 
-    /** 更新额度值并重绘 */
+    /** 更新额度目标值。动画会平滑追赶此值。 */
     fun updateQuota(quota: Int) {
         _quota = quota.coerceIn(Constants.QUOTA_MIN, Constants.QUOTA_MAX)
+        // 不在此处触发动画 — 连续循环自动处理
+    }
+
+    /** 直接设置额度（无动画，首次显示时用） */
+    fun setQuotaImmediate(quota: Int) {
+        _quota = quota.coerceIn(Constants.QUOTA_MIN, Constants.QUOTA_MAX)
+        _displayValue = _quota.toFloat()
+        animStartTime = System.currentTimeMillis()
         invalidate()
     }
 
     /** 获取当前额度 */
     fun getQuota(): Int = _quota
+
+    /** 释放动画资源 */
+    fun releaseAnimation() {
+        animHandler.removeCallbacks(animRunnable)
+    }
+
+    // =========================================================
+    // 连续动画循环
+    // =========================================================
+
+    private fun tickAnimation() {
+        val diff = _quota - _displayValue
+
+        if (abs(diff) > 0.3f) {
+            // 追赶目标：每帧前进 chaseSpeed * (16/1000) 点
+            val step = chaseSpeed * 0.016f
+            if (abs(diff) < step) {
+                _displayValue = _quota.toFloat()
+            } else {
+                _displayValue += step * if (diff > 0) 1f else -1f
+            }
+            invalidate()
+        } else if (abs(diff) > 0.01f) {
+            // 非常接近时直接到位
+            _displayValue = _quota.toFloat()
+            invalidate()
+        }
+        // 如果 diff <= 0.01，无变化 → 不用重绘
+    }
 
     // =========================================================
     // 测量
@@ -127,25 +179,35 @@ class FloatBallView(context: Context) : View(context) {
         // ---- 1. 外阴影 ----
         canvas.drawCircle(cx, cy, outerRadius, shadowPaint)
 
-        // ---- 2. 10 段弧 ----
+        // ---- 2. 10 段弧 — 使用 _displayValue（连续浮点数） ----
         segmentBgPaint.strokeWidth = ringStrokeWidth
         segmentFillPaint.strokeWidth = ringStrokeWidth
 
-        val filledSegments = _quota / 10
-        val fillColor = getQuotaColor(_quota)
+        val animSegments = (_displayValue / 10f).coerceIn(0f, segmentCount.toFloat())
+        val fillColor = getQuotaColor(_displayValue.toInt())
 
         for (i in 0 until segmentCount) {
             val startAngle = -90f + i * (segmentSweepAngle + segmentGapAngle) + segmentGapAngle / 2f
+            val segmentFillRatio = (animSegments - i).coerceIn(0f, 1f)
 
-            if (i < filledSegments) {
+            if (segmentFillRatio >= 0.99f) {
                 segmentFillPaint.color = fillColor
+                segmentFillPaint.alpha = 255
                 canvas.drawArc(ringRect, startAngle, segmentSweepAngle, false, segmentFillPaint)
-            } else {
+            } else if (segmentFillRatio <= 0.01f) {
+                segmentBgPaint.alpha = 255
                 canvas.drawArc(ringRect, startAngle, segmentSweepAngle, false, segmentBgPaint)
+            } else {
+                // 边缘过渡：先背景段，再叠加部分填充段
+                segmentBgPaint.alpha = 255
+                canvas.drawArc(ringRect, startAngle, segmentSweepAngle, false, segmentBgPaint)
+                segmentFillPaint.color = fillColor
+                segmentFillPaint.alpha = (segmentFillRatio * 255).toInt()
+                canvas.drawArc(ringRect, startAngle, segmentSweepAngle, false, segmentFillPaint)
             }
         }
 
-        // ---- 3. 中心圆（遮盖弧线内侧，形成环） ----
+        // ---- 3. 中心圆 ----
         canvas.drawCircle(cx, cy, innerRadius, centerPaint)
 
         // ---- 4. 中心小圆环装饰 ----
@@ -156,29 +218,17 @@ class FloatBallView(context: Context) : View(context) {
         }
         canvas.drawCircle(cx, cy, innerRadius * 0.85f, innerRingPaint)
 
-        // ---- 5. 数字 ----
+        // ---- 5. 数字（居中修正）- 显示连续变化的整数 ----
         val textSize = outerRadius * 0.55f
         textPaint.textSize = textSize
         val fm = textPaint.fontMetrics
-        val textYOffset = -(fm.descent - fm.ascent) / 2f - fm.descent
-
-        canvas.drawText(
-            "${_quota}",
-            cx,
-            cy + textYOffset,
-            textPaint
-        )
+        val textBaseline = cy - (fm.ascent + fm.descent) / 2f
+        canvas.drawText("${_displayValue.toInt()}", cx, textBaseline, textPaint)
 
         // ---- 6. 小字 "额度" ----
         smallTextPaint.textSize = outerRadius * 0.18f
-        canvas.drawText(
-            "额度",
-            cx,
-            cy + outerRadius * 0.55f,
-            smallTextPaint
-        )
+        canvas.drawText("额度", cx, cy + outerRadius * 0.50f, smallTextPaint)
     }
-
     // =========================================================
     // 触摸 / 拖动
     // =========================================================
@@ -215,9 +265,7 @@ class FloatBallView(context: Context) : View(context) {
                         try {
                             (context.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager)
                                 .updateViewLayout(this, params)
-                        } catch (_: Exception) {
-                            // 极罕见竞态
-                        }
+                        } catch (_: Exception) { }
                     }
                 }
                 return true
@@ -225,7 +273,6 @@ class FloatBallView(context: Context) : View(context) {
 
             MotionEvent.ACTION_UP -> {
                 if (!isDragging) {
-                    // 单击 → 触发宽限
                     onGraceRequested?.invoke()
                 }
                 return true
@@ -242,9 +289,9 @@ class FloatBallView(context: Context) : View(context) {
 
     private fun getQuotaColor(quota: Int): Int {
         return when {
-            quota >= 60 -> 0xFF34D399.toInt()   // green
-            quota >= 30 -> 0xFFFBBF24.toInt()   // yellow
-            else -> 0xFFF87171.toInt()           // red
+            quota >= 60 -> 0xFF34D399.toInt()
+            quota >= 30 -> 0xFFFBBF24.toInt()
+            else -> 0xFFF87171.toInt()
         }
     }
 }

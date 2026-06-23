@@ -42,6 +42,7 @@ class OverlayManager(private val context: Context) {
      * 由 QuotaService 每分钟 tick 调用。
      *
      * 悬浮球始终显示（只要 Service 运行），让用户随时看到额度。
+     * 额度变更时悬浮球环形进度条有渐消动画（smooth fade）。
      *
      * @param quota 当前额度（0-100）
      * @param isWatching 当前是否在刷短视频
@@ -52,10 +53,10 @@ class OverlayManager(private val context: Context) {
         isWatching: Boolean,
         inGracePeriod: Boolean
     ) {
-        // 1. 宽限期间：隐藏悬浮球 + 蒙层，通知栏显示倒计时
+        // 1. 宽限期间：显示悬浮球，隐藏蒙层
         if (inGracePeriod) {
-            removeFloatBall()
             hideInterventionOverlay()
+            addFloatBall(quota)
             return
         }
 
@@ -66,7 +67,7 @@ class OverlayManager(private val context: Context) {
         // 3. 在看短视频 + 额度为 0 → 显示蒙层 + 悬浮球(在蒙层之上)
         if (isWatching && quota <= Constants.QUOTA_MIN) {
             showInterventionOverlay()
-            addFloatBall(quota)  // 确保悬浮球在蒙层之上
+            addFloatBall(quota)
             return
         }
 
@@ -117,7 +118,8 @@ class OverlayManager(private val context: Context) {
             y = (displayMetrics.heightPixels / 3)
         }
 
-        ball.updateQuota(quota)
+        // 首次显示直接用即时值，无动画
+        ball.setQuotaImmediate(quota)
 
         // 宽限回调：单击 → 弹出宽限对话框
         ball.onGraceRequested = {
@@ -168,8 +170,10 @@ class OverlayManager(private val context: Context) {
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            // 不加 FLAG_NOT_TOUCH_MODAL → 拦截下层所有触控
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             android.graphics.PixelFormat.TRANSLUCENT
         ).apply {
@@ -181,6 +185,10 @@ class OverlayManager(private val context: Context) {
         // 蒙层上的"申请宽限"按钮 → 弹出宽限对话框
         overlay.onGraceRequested = {
             showGraceDialog()
+        }
+        // 蒙层上的"返回"按钮 → 关闭蒙层（下次 tick 会重新判断）
+        overlay.onDismiss = {
+            hideInterventionOverlay()
         }
 
         try {
@@ -210,6 +218,7 @@ class OverlayManager(private val context: Context) {
 
     /** Service 销毁时释放所有 WindowManager 资源 */
     fun release() {
+        floatBall?.releaseAnimation()
         removeFloatBall()
         removeGraceDialog()
         hideInterventionOverlay()

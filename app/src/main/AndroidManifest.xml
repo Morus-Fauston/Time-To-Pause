@@ -35,6 +35,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ui.DebugActivity"
+            android:exported="false"
+            android:theme="@style/Theme.TimeToPause" />
+
         <service
             android:name=".service.QuotaService"
             android:exported="false"

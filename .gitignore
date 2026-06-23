@@ -11,3 +11,6 @@
 .cxx
 local.properties
 /app/build
+# 更新日志（自动生成，CI 不跟踪）
+CHANGELOG.md
+CHANGELOG.txt
