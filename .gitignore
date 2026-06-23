@@ -1,9 +1,7 @@
-/skill.md
-/设计思路.md
-
 # Android / Gradle
 *.iml
 .gradle
+.kotlin
 /local.properties
 /.idea
 .DS_Store
