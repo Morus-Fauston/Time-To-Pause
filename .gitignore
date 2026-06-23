@@ -14,3 +14,8 @@ local.properties
 # 更新日志（自动生成，CI 不跟踪）
 CHANGELOG.md
 CHANGELOG.txt
+# 图标资源（本地素材，不纳入版本控制）
+/Nieobie icons/
+# 图标浏览器生成器（一次性辅助工具）
+generate_icon_browser.py
+icon_browser.html
