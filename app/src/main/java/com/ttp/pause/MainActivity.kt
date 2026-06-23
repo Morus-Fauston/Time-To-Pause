@@ -3,6 +3,7 @@ package com.ttp.pause
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -12,11 +13,14 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.constraintlayout.widget.ConstraintLayout
+import com.ttp.pause.data.QuotaStore
 import com.ttp.pause.service.QuotaService
 
 /**
@@ -26,13 +30,28 @@ import com.ttp.pause.service.QuotaService
  * 1. 欢迎页 → 模拟进度条动效 → 功能介绍
  * 2. 阶梯式权限引导
  * 3. 开机自启选项
- * 4. 启动 QuotaService
+ * 4. 启动 QuotaService → 切换到主仪表盘
+ *
+ * 后续启动：
+ * - 直接显示主仪表盘，查看额度和设置
  */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var progressDemo: ProgressBar
     private lateinit var tvProgressHint: TextView
     private lateinit var btnStart: Button
+    private lateinit var welcomeContainer: ConstraintLayout
+    private lateinit var dashboardContainer: ConstraintLayout
+
+    // 仪表盘控件
+    private lateinit var dashboardQuotaCircle: TextView
+    private lateinit var dashboardQuotaLabel: TextView
+    private lateinit var dashboardStatus: TextView
+    private lateinit var dashboardGraceInfo: TextView
+    private lateinit var btnSettings: ImageView
+
+    private lateinit var quotaStore: QuotaStore
+    private var prefsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
 
     private val handler = Handler(Looper.getMainLooper())
 
@@ -54,22 +73,156 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        quotaStore = QuotaStore(this)
+
+        // 欢迎页
+        welcomeContainer = findViewById(R.id.welcomeContainer)
         progressDemo = findViewById(R.id.progressDemo)
         tvProgressHint = findViewById(R.id.tvProgressHint)
         btnStart = findViewById(R.id.btnStart)
 
-        // 启动欢迎页模拟动画
+        // 仪表盘
+        dashboardContainer = findViewById(R.id.dashboardContainer)
+        dashboardQuotaCircle = findViewById(R.id.dashboardQuotaCircle)
+        dashboardQuotaLabel = findViewById(R.id.dashboardQuotaLabel)
+        dashboardStatus = findViewById(R.id.dashboardStatus)
+        dashboardGraceInfo = findViewById(R.id.dashboardGraceInfo)
+        btnSettings = findViewById(R.id.btnSettings)
+
+        // 判断是否已经设置过 → 直接进入仪表盘
+        if (hasCompletedSetup()) {
+            showDashboard()
+            return
+        }
+
+        // 首次启动：欢迎页
+        welcomeContainer.visibility = android.view.View.VISIBLE
+        dashboardContainer.visibility = android.view.View.GONE
         handler.post(demoAnim)
 
         btnStart.setOnClickListener {
             handler.removeCallbacks(demoAnim)
             startPermissionGuide()
         }
+
+        // 设置按钮 → 设置弹窗
+        btnSettings.setOnClickListener {
+            showSettingsDialog()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 注册 SharedPreferences 监听器，实时更新仪表盘额度
+        if (prefsListener == null) {
+            prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                if (key == Constants.KEY_QUOTA || key == Constants.KEY_GRACE_END) {
+                    handler.post { updateDashboardQuota() }
+                }
+            }
+            val prefs = getSharedPreferences(Constants.PREF_NAME, Context.MODE_PRIVATE)
+            prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+        }
+        // 每次回到前台刷新仪表盘
+        if (dashboardContainer.visibility == android.view.View.VISIBLE) {
+            updateDashboardQuota()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        prefsListener?.let {
+            val prefs = getSharedPreferences(Constants.PREF_NAME, Context.MODE_PRIVATE)
+            prefs.unregisterOnSharedPreferenceChangeListener(it)
+            prefsListener = null
+        }
     }
 
     override fun onDestroy() {
         handler.removeCallbacks(demoAnim)
         super.onDestroy()
+    }
+
+    /** 是否已完成初始设置 */
+    private fun hasCompletedSetup(): Boolean {
+        return getSharedPreferences(Constants.PREF_NAME, Context.MODE_PRIVATE)
+            .getBoolean("setup_completed", false)
+    }
+
+    /** 标记设置完成 */
+    private fun markSetupCompleted() {
+        getSharedPreferences(Constants.PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("setup_completed", true)
+            .apply()
+    }
+
+    /** 切换到仪表盘 */
+    private fun showDashboard() {
+        welcomeContainer.visibility = android.view.View.GONE
+        dashboardContainer.visibility = android.view.View.VISIBLE
+        updateDashboardQuota()
+
+        // 确保 Service 在运行
+        val intent = Intent(this, QuotaService::class.java)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+        } catch (_: Exception) {
+            // Service 已在运行则忽略
+        }
+    }
+
+    /** 更新仪表盘额度显示 */
+    private fun updateDashboardQuota() {
+        val quota = quotaStore.quota
+        dashboardQuotaCircle.text = "$quota"
+        dashboardQuotaLabel.text = "剩余额度 $quota%"
+
+        // 更新颜色
+        val color = when {
+            quota >= 60 -> getColor(R.color.quota_high)
+            quota >= 30 -> getColor(R.color.quota_medium)
+            else -> getColor(R.color.quota_low)
+        }
+        dashboardQuotaCircle.setTextColor(color)
+
+        // 宽限状态
+        if (quotaStore.isInGracePeriod()) {
+            dashboardGraceInfo.visibility = android.view.View.VISIBLE
+            dashboardGraceInfo.text = "宽限中 ${quotaStore.getGraceRemainingSeconds()}秒"
+            dashboardStatus.text = "宽限倒计时中..."
+        } else {
+            dashboardGraceInfo.visibility = android.view.View.GONE
+            dashboardStatus.text = if (quota > 0) "监控中..." else "额度已用完"
+        }
+    }
+
+    /** 显示简单设置弹窗 */
+    private fun showSettingsDialog() {
+        val items = arrayOf("重新引导权限", "关闭应用")
+        AlertDialog.Builder(this)
+            .setTitle("设置")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> {
+                        // 重新引导权限
+                        getSharedPreferences(Constants.PREF_NAME, Context.MODE_PRIVATE)
+                            .edit().putBoolean("setup_completed", false).apply()
+                        startPermissionGuide()
+                    }
+                    1 -> {
+                        // 关闭应用
+                        stopService(Intent(this, QuotaService::class.java))
+                        finishAffinity()
+                    }
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun animateProgress(from: Int, to: Int, durationMs: Long) {
@@ -233,7 +386,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 完成设置 → 启动 QuotaService
+     * 完成设置 → 启动 QuotaService → 切换到仪表盘
      */
     private fun finishSetup() {
         val intent = Intent(this, QuotaService::class.java)
@@ -242,8 +395,9 @@ class MainActivity : AppCompatActivity() {
         } else {
             startService(intent)
         }
+        markSetupCompleted()
         Toast.makeText(this, "停一下吧已开始工作 🎉", Toast.LENGTH_SHORT).show()
-        finish()
+        showDashboard()
     }
 
     private fun hasUsageStatsPermission(): Boolean {

@@ -25,7 +25,7 @@ import kotlin.math.min
 class FloatBallView(context: Context) : View(context) {
 
     // ---- 尺寸 ----
-    private val defaultSize = resources.displayMetrics.density * 80f // 80dp
+    private val defaultSize = resources.displayMetrics.density * 52f // 52dp
     private val ringThicknessRatio = 0.28f
     private val segmentCount = 10
     private val segmentSweepAngle = 34f // (360 / 10) - 2° gap

@@ -167,6 +167,25 @@ class GraceDialogView(private val ctx: Context) {
             }
         })
 
+        // 间距
+        card.addView(createSpacer(ctx, 0, 12))
+
+        // 关闭按钮（退出宽限对话框）
+        card.addView(Button(ctx).apply {
+            text = ctx.getString(R.string.grace_dialog_cancel)
+            setTextColor(0xFF6B7280.toInt())
+            setBackgroundColor(0xFFE5E7EB.toInt())
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (44 * ctx.resources.displayMetrics.density).toInt()
+            )
+            layoutParams = lp
+
+            setOnClickListener {
+                dismiss()
+            }
+        })
+
         root.addView(card)
 
         try {

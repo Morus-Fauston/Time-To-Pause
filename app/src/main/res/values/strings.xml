@@ -27,4 +27,8 @@
     <string name="notification_grace">宽限倒计时: %d秒</string>
     <string name="verify_input_hint">请输入答案</string>
     <string name="btn_verify">确认</string>
+    <string name="dashboard_quota_label">剩余额度</string>
+    <string name="dashboard_status_active">监控中…</string>
+    <string name="btn_cancel">取消</string>
+    <string name="grace_dialog_cancel">关闭</string>
 </resources>

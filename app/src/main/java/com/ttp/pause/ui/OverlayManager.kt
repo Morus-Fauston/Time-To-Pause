@@ -41,6 +41,8 @@ class OverlayManager(private val context: Context) {
      * 更新悬浮球状态 + 干预蒙层状态。
      * 由 QuotaService 每分钟 tick 调用。
      *
+     * 悬浮球始终显示（只要 Service 运行），让用户随时看到额度。
+     *
      * @param quota 当前额度（0-100）
      * @param isWatching 当前是否在刷短视频
      * @param inGracePeriod 是否在宽限期
@@ -50,39 +52,31 @@ class OverlayManager(private val context: Context) {
         isWatching: Boolean,
         inGracePeriod: Boolean
     ) {
-        // 1. 宽限期间：隐藏悬浮球 + 隐藏蒙层
+        // 1. 宽限期间：隐藏悬浮球 + 蒙层，通知栏显示倒计时
         if (inGracePeriod) {
             removeFloatBall()
             hideInterventionOverlay()
             return
         }
 
-        // 2. 追踪状态变化
-        val watchingChanged = isWatching != lastDetectedWatching
+        // 2. 追踪状态
         lastDetectedWatching = isWatching
         lastQuota = quota
 
-        // 3. 不是在看短视频 → 隐藏所有悬浮 UI
-        if (!isWatching) {
-            removeFloatBall()
-            hideInterventionOverlay()
-            return
-        }
-
-        // 4. 在看短视频 + 额度为 0 → 显示蒙层 + 悬浮球(在蒙层之上)
-        if (quota <= Constants.QUOTA_MIN) {
+        // 3. 在看短视频 + 额度为 0 → 显示蒙层 + 悬浮球(在蒙层之上)
+        if (isWatching && quota <= Constants.QUOTA_MIN) {
             showInterventionOverlay()
             addFloatBall(quota)  // 确保悬浮球在蒙层之上
             return
         }
 
-        // 5. 在看短视频 + 额度 > 0 → 隐藏蒙层，显示悬浮球
-        hideInterventionOverlay()
-        if (floatBall == null || watchingChanged) {
-            addFloatBall(quota)
-        } else {
-            floatBall?.updateQuota(quota)
+        // 4. 在看短视频 + 额度 > 0 → 隐藏蒙层，显示悬浮球
+        if (isWatching && quota > Constants.QUOTA_MIN) {
+            hideInterventionOverlay()
         }
+
+        // 5. 始终显示悬浮球（只要 Service 运行）
+        addFloatBall(quota)
     }
 
     /** 主动移除悬浮球（Service 销毁时） */
@@ -96,11 +90,14 @@ class OverlayManager(private val context: Context) {
     }
 
     private fun addFloatBall(quota: Int) {
-        if (floatBall != null) return
+        if (floatBall != null) {
+            floatBall?.updateQuota(quota)
+            return
+        }
 
         val ball = FloatBallView(context)
         val density = context.resources.displayMetrics.density
-        val ballSize = (80 * density).toInt()
+        val ballSize = (52 * density).toInt()
 
         // 默认位置：屏幕右侧垂直居中
         val displayMetrics = context.resources.displayMetrics
@@ -111,11 +108,12 @@ class OverlayManager(private val context: Context) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             android.graphics.PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = displayMetrics.widthPixels - ballSize - (16 * density).toInt()
+            x = displayMetrics.widthPixels - ballSize - (12 * density).toInt()
             y = (displayMetrics.heightPixels / 3)
         }
 
