@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- ⏸️ 暂停图标 -->
+    <group
+        android:translateX="27"
+        android:translateY="24"
+        android:scaleX="0.5"
+        android:scaleY="0.5">
+        <!-- 左竖条 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M20,12 L35,12 Q38,12 38,15 L38,93 Q38,96 35,96 L20,96 Q17,96 17,93 L17,15 Q17,12 20,12Z" />
+        <!-- 右竖条 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M70,12 L85,12 Q88,12 88,15 L88,93 Q88,96 85,96 L70,96 Q67,96 67,93 L67,15 Q67,12 70,12Z" />
+    </group>
+
+    <!-- 进度环 -->
+    <group
+        android:translateX="54"
+        android:translateY="54">
+        <!-- 环底色 -->
+        <path
+            android:fillColor="@android:color/transparent"
+            android:strokeColor="#40FFFFFF"
+            android:strokeWidth="3"
+            android:pathData="M0,-40 A40,40 0 1,1 -0,-40" />
+        <!-- 环进度（约 70% 弧） -->
+        <path
+            android:fillColor="@android:color/transparent"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="3"
+            android:pathData="M0,-40 A40,40 0 0,1 37.6,-13.7" />
+    </group>
+</vector>

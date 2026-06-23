@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">停一下吧</string>
+    <string name="welcome_title">是时候，停一下了。</string>
+    <string name="feature_line1">刷短视频时额度递减</string>
+    <string name="feature_line2">停下时自动恢复</string>
+    <string name="feature_line3">归零时给生活留个缓冲</string>
+    <string name="btn_start">开始使用</string>
+    <string name="perm_usage_title">开启使用情况访问权限</string>
+    <string name="perm_usage_desc">我们需要读取应用使用情况来检测您是否在刷短视频</string>
+    <string name="perm_alert_title">需要悬浮窗权限</string>
+    <string name="perm_alert_desc">需要悬浮窗权限来显示进度球和干预蒙层</string>
+    <string name="perm_battery_title">忽略电池优化</string>
+    <string name="perm_battery_desc">开启后可在后台持续运行，防止被系统杀死</string>
+    <string name="perm_skip">跳过</string>
+    <string name="perm_go_settings">去设置</string>
+    <string name="boot_title">开机自启</string>
+    <string name="boot_desc">开机后自动启动，无需手动打开</string>
+    <string name="quota_exhausted">今日额度已用完</string>
+    <string name="time_to_pause">Time To Pause。</string>
+    <string name="apply_grace_title">需要休息一下吗？</string>
+    <string name="btn_apply_grace">申请宽限</string>
+    <string name="grace_granted">已获得 5 分钟缓冲时间 ☕️</string>
+    <string name="service_channel_name">停一下吧</string>
+    <string name="service_channel_desc">后台监控服务</string>
+    <string name="notification_quota">短视频额度: %d</string>
+    <string name="notification_grace">宽限倒计时: %d秒</string>
+    <string name="verify_input_hint">请输入答案</string>
+    <string name="btn_verify">确认</string>
+</resources>

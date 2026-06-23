@@ -1,2 +1,15 @@
 /skill.md
 /设计思路.md
+
+# Android / Gradle
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/app/build
