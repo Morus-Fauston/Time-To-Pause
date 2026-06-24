@@ -110,8 +110,13 @@ class SimForegroundState:
 
     @property
     def is_effectively_connected(self) -> bool:
-        return (self.is_connected and self.has_received_first_event
-                and (time.time() - self.last_event_timestamp) < 5.0)
+        if not self.is_connected or not self.has_received_first_event:
+            return False
+        # 已知短视频 App → 信任检测结果，不设超时（单Activity架构不触发事件）
+        if self.last_package in SHORT_VIDEO_PACKAGES or self.last_package == BILIBILI_PACKAGE:
+            return True
+        # 非短视频 App 或 null → watchdog 5s 存活检测
+        return (time.time() - self.last_event_timestamp) < 5.0
 
 
 # =============================================================

@@ -2,6 +2,7 @@ package com.ttp.pause.detector
 
 import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityEvent
+import com.ttp.pause.Constants
 import com.ttp.pause.service.QuotaService
 
 /**
@@ -36,11 +37,28 @@ class ForegroundMonitorService : AccessibilityService() {
 
         /**
          * 服务是否真实存活且可供检测使用
-         * 条件：已连接 + 已收到首个事件 + 5 秒内收到过事件
+         *
+         * 策略：
+         * - 若 lastForegroundPackage 是已知短视频 App（抖音/快手/TikTok/微视/B站），
+         *   直接信任检测结果，不设超时。
+         *   因为这些 App 使用单 Activity 架构，用户滑动视频时不会触发
+         *   TYPE_WINDOW_STATE_CHANGED，前一版 5s watchdog 会导致静置观看时
+         *   误判为"服务已死"而错误降级到轮询。
+         *
+         * - 若 lastForegroundPackage 是其他 App（或 null），走 watchdog 5s 超时。
+         *   这覆盖了"服务被系统静默杀死，但 isConnected 仍为 true"的兜底保护。
          */
         val isEffectivelyConnected: Boolean
-            get() = isConnected && hasReceivedFirstEvent &&
-                    (System.currentTimeMillis() - lastEventTimestamp < 5000L)
+            get(): Boolean {
+                if (!isConnected || !hasReceivedFirstEvent) return false
+                val pkg = lastForegroundPackage
+                // 已知短视频 App → 信任检测结果，不设超时
+                if (pkg in Constants.SHORT_VIDEO_PACKAGES || pkg == Constants.BILIBILI_PACKAGE) {
+                    return true
+                }
+                // 非短视频 App 或 null → watchdog 5s 存活检测
+                return (System.currentTimeMillis() - lastEventTimestamp < 5000L)
+            }
     }
 
     override fun onServiceConnected() {
