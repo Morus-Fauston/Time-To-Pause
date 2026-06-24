@@ -1,54 +1,180 @@
-# Time To Pause（停一下吧）
+<h1 align="center">⏸️ Time To Pause（停一下吧）</h1>
 
-> 给生活留个缓冲
+<p align="center">
+  <em>给生活留个缓冲 · 温和干预型短视频防沉迷工具</em>
+</p>
 
-一款温和干预型手机防沉迷工具，通过短视频额度消耗机制与视觉提示，帮助用户控制短视频观看时长。
+<p align="center">
+  <img src="https://img.shields.io/badge/Kotlin-2.0.21-7F52FF?logo=kotlin&logoColor=white" alt="Kotlin"/>
+  <img src="https://img.shields.io/badge/minSdk-26-3DDC84?logo=android&logoColor=white" alt="minSdk 26"/>
+  <img src="https://img.shields.io/badge/targetSdk-34-3DDC84?logo=android&logoColor=white" alt="targetSdk 34"/>
+  <img src="https://img.shields.io/badge/version-0.2.0.revised.3-FF6B6B" alt="version"/>
+  <img src="https://img.shields.io/badge/license-Apache%202.0-8A2BE2" alt="license"/>
+</p>
+
+---
+
+## 概述
+
+短视频 App 的设计本质是注意力经济——无限滚动、自动连播让用户"无意识下滑"。现有的防沉迷方案要么**暴力锁死**（引起逆反心理），要么**形同虚设**（藏在设置深处没人看）。
+
+**Time To Pause** 在两者之间找到了一个中间地带：它引入**短视频额度**的概念——刷视频时消耗，停止时恢复。额度归零时，一个视觉蒙层会让画面"不好看"，同时提供算术题验证的宽限通道，让用户在被干预时**仍保留选择权**。
+
+> 🎯 **核心哲学：非对抗性劝导**——不是锁死你，而是让你"停一下"，主动选择是否继续。
+
+---
+
+## 核心机制
+
+| 机制 | 说明 |
+|:---|:---|
+| **🎯 短视频额度** | 0–100 点。刷视频消耗（白天 −10/分，夜间 −16/分），停止恢复（白天 +5/分，夜间 +3/分）。**无每日重置**，靠自然行为调节。 |
+| **⏸️ 视觉蒙层** | 额度归零时覆盖全屏。可选**温和干预**（渐变呼吸动画）或**视觉剥夺**（漂白 + 模糊 + 噪点，各三档强度）。不拦截下层触控。 |
+| **🧮 宽限机制** | 百以内算术题换 5 分钟宽限。期间额度完全冻结（不扣不加），答错无限重试。 |
+| **🔵 悬浮球** | 环形进度条实时显示额度。宽限期间切换为倒计时模式。可拖拽，可设置"仅在看短视频时显示"。 |
+| **📡 实时检测** | AccessibilityService 事件驱动（推荐），未开启时自动降级到 UsageStatsManager 5 秒窗口轮询备选。B 站按 Activity 区分短视频/长视频。 |
+
+---
 
 ## 项目结构
 
 ```
 Time-To-Pause/
-├── app/
-│   └── src/main/
-│       ├── java/com/ttp/pause/
-│       │   ├── MainActivity.kt        # 欢迎页 + 权限引导
-│       │   ├── Constants.kt            # 全局常量 & 短视频白名单
-│       │   ├── detector/
-│       │   │   └── AppDetector.kt      # 前台应用检测
-│       │   ├── data/
-│       │   │   └── QuotaStore.kt       # 额度持久化
-│       │   ├── service/
-│       │   │   ├── QuotaService.kt     # 后台配额服务
-│       │   │   └── QuotaEngine.kt      # 额度计算引擎（纯 Kotlin）
-│       │   ├── ui/
-│       │   │   ├── FloatBallView.kt    # 悬浮球自定义 View
-│       │   │   ├── OverlayManager.kt   # 悬浮窗统筹管理器
-│       │   │   ├── InterventionOverlayView.kt # 全屏干预蒙层
-│       │   │   └── GraceDialogView.kt  # 宽限算术对话框
-│       │   └── receiver/
-│       │       └── BootReceiver.kt     # 开机自启
-│       └── res/
-├── CONTEXT.md          # 领域术语表
-├── 设计思路.md           # 原始设计文档
-└── README.md
+├── app/src/main/java/com/ttp/pause/
+│   ├── MainActivity.kt                    # 欢迎页 + 权限引导 + 仪表盘
+│   ├── Constants.kt                       # 全局常量 & 短视频/Activity 白名单
+│   ├── detector/
+│   │   ├── AppDetector.kt                 # 前台应用检测（包名匹配 + UsageStats 轮询）
+│   │   └── ForegroundMonitorService.kt    # ⭐ AccessibilityService 事件驱动主方案
+│   ├── data/
+│   │   └── QuotaStore.kt                  # 额度持久化（SharedPreferences）
+│   ├── service/
+│   │   ├── QuotaService.kt                # 后台核心引擎（1s tick 循环）
+│   │   └── QuotaEngine.kt                 # 纯计算引擎（零 Android 依赖，可独立测试）
+│   ├── ui/
+│   │   ├── FloatBallView.kt               # 悬浮球环形进度条自定义 View
+│   │   ├── QuotaCircleView.kt             # 仪表盘环形指示器
+│   │   ├── OverlayManager.kt              # 悬浮窗统筹管理器
+│   │   ├── InterventionOverlayView.kt     # 全屏干预蒙层
+│   │   ├── GraceDialogView.kt             # 宽限算术对话框
+│   │   └── DebugActivity.kt               # 调试模式
+│   └── receiver/
+│       └── BootReceiver.kt                # 开机自启
+├── docs/
+│   ├── prd.md                             # 产品需求文档（v1.4）
+│   ├── adr/                               # 架构决策记录（4 个）
+│   │   ├── 0001-service-architecture.md
+│   │   ├── 0002-ui-tech-stack.md
+│   │   ├── 0003-detection-strategy.md
+│   │   └── 0004-overlay-two-layer-architecture.md
+│   └── agents/                            # Agent 文档
+├── CONTEXT.md                             # 领域术语表（Agent 上下文）
+├── AGENTS.md                              # Agent 配置与版本规则
+├── PRIVACY.md                             # 隐私政策
+├── tests/                                 # Python 测试模拟器
+│   ├── simulate_quota.py                  # 额度行为完整模拟器
+│   └── diagnose_debug_bug.py              # 系统事件 bug 诊断
 ```
+
+---
 
 ## 技术栈
 
-- **语言**: Kotlin
-- **最低兼容**: Android 8.0 (API 26)
-- **目标兼容**: Android 14 (API 34)
-- **UI**: XML + View 体系
-- **数据持久化**: SharedPreferences
-- **构建**: Android Gradle Tools 8.2.2 + Gradle 8.5
+| 类别 | 选型 |
+|:---|:---|
+| **语言** | Kotlin 2.0.21 |
+| **最低兼容** | Android 8.0 (API 26) |
+| **目标兼容** | Android 14 (API 34) |
+| **UI 体系** | XML + AppCompat + ConstraintLayout |
+| **悬浮窗** | `WindowManager` 自定义 View |
+| **数据持久化** | `SharedPreferences` |
+| **构建工具** | AGP 8.9.0 + Gradle 9.6.0 |
+| **JDK** | Microsoft JDK 25 |
+| **架构** | ForegroundService + Handler + AccessibilityService 事件驱动 |
+| **测试** | Python 行为模拟器（`tests/`），JUnit 5（规划中） |
+| **许可证** | [Apache 2.0](LICENSE) |
+
+---
+
+## 检测架构
+
+```
+AccessibilityService 已连接 + 有有效包名 → ForegroundMonitorService
+  ├── 已知短视频 App (抖音/快手/TikTok/微视) → 直接信任, 无超时
+  ├── B 站 → 信任无超时 + 按 Activity 白名单区分短视频/长视频
+  └── 其他 App / null → 5s watchdog 存活检测
+                      ↓ (watchdog 过期或未连接)
+AppDetector.isWatchingShortVideo() → UsageStatsManager 5s 窗口轮询
+                              ↓ (B 站在轮询模式下全按短视频计)
+```
+
+---
 
 ## 开发路线图
 
-| Phase | 内容 | 状态 |
-| :--- | :--- | :--- |
-| Phase 1 | 基础框架 & 前台检测 | ✅ 完成 |
-| Phase 2 | 核心逻辑 & 后台服务 | ✅ 完成 |
-| Phase 3 | 悬浮球 UI | ✅ 完成 |
-| Phase 4 | 视觉干预 & 宽限 | ✅ 完成 |
-| Phase 5 | 权限适配 & 厂商兼容 | ⏳ 待开发 |
-| Phase 6 | 测试 & 优化 | ⏳ 待开发
+### 🐛 v0.2.x — Bug 修复（当前）
+键盘输入法中断修复 · 蒙层残留修复 · 悬浮球倒计时 · 30 秒防打扰
+
+### 🚀 v0.3.x — 体验优化（下一阶段）
+蒙层分两层重构 · 通知栏快捷操作 · QuotaEngine 单元测试 · 远程白名单
+
+### 📦 v0.4.x — 可发布版本
+完整 Android 测试框架 · 性能优化 · 隐私合规
+
+### 🔭 v0.5.x+ — 扩展方向
+微信视频号/WebView 检测 · 数据统计 · 自定义额度 · iOS
+
+---
+
+## 构建与运行
+
+### 前置条件
+
+- [Microsoft JDK 25](https://learn.microsoft.com/java/openjdk/download) 或兼容 JDK 17+
+- Android SDK（API 34）
+- 已设置 `ANDROID_HOME` 环境变量
+
+### 构建 APK
+
+```powershell
+# 使用项目根目录的 build.bat（自动设置 JAVA_HOME）
+.\build.bat
+
+# 或手动指定 JDK
+$env:JAVA_HOME = "C:\Program Files\Microsoft\jdk-25.0.3.9-hotspot"
+.\gradlew.bat assembleDebug
+```
+
+APK 输出：`app/build/outputs/apk/debug/TTP.{versionName}.apk`
+
+### 运行测试模拟器
+
+```powershell
+python tests\simulate_quota.py      # 额度行为回归测试
+python tests\diagnose_debug_bug.py  # 系统事件诊断
+```
+
+---
+
+## 设计理念
+
+本项目有意选择了"温和干预"而非"强制封锁"的路线。这体现在每个设计决策中：
+
+- **蒙层不拦截触控** → 用户仍可操作 App，只是视觉上"看不下去"
+- **宽限答题无限重试** → 制造"停顿反思"而非惩罚
+- **额度无每日重置** → 靠自然行为调节，而非系统强制归零
+- **零数据上传** → 所有数据存储在本地，不上传任何信息
+
+> 💡 **产品的目标不是"让用户刷不了"，而是"让用户在被干预时停顿一下，主动选择是否要继续"。**
+
+---
+
+## 隐私
+
+本应用**不收集、不上传、不分享任何用户数据**。所有数据存储在设备本地。详见 [PRIVACY.md](PRIVACY.md)。
+
+---
+
+## 许可证
+
+[Apache 2.0](LICENSE) © 2026 Time To Pause
