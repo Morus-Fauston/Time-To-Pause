@@ -9,6 +9,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.ttp.pause.Constants
 import com.ttp.pause.R
 import com.ttp.pause.data.QuotaStore
+import com.ttp.pause.service.QuotaService
 
 /**
  * Debug 调试 Activity
@@ -51,6 +52,7 @@ class DebugActivity : AppCompatActivity() {
 
         btnSetQuota.setOnClickListener {
             quotaStore.quota = seekQuota.progress
+            QuotaService.currentInstance?.syncExactQuota()
             Toast.makeText(this, "额度已设置为 ${seekQuota.progress}", Toast.LENGTH_SHORT).show()
         }
 

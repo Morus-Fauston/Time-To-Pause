@@ -47,8 +47,8 @@ class FloatBallView(context: Context) : View(context) {
     // ---- 连续平滑动画 ----
     /** 当前实际显示值（连续浮点，平滑变化） */
     private var _displayValue = Constants.QUOTA_MAX.toFloat()
-    /** 追赶速度：每秒变化的百分比点数 */
-    private val chaseSpeed = 3.5f // 约 3.5 点/秒 → 30 点约 8.5 秒走完
+    /** 追赶速度：每秒变化的百分比点数 — 100 点约 0.6 秒走完 */
+    private val chaseSpeed = 166.67f
     /** 动画循环（每帧 16ms 约 60fps） */
     private val animHandler = Handler(Looper.getMainLooper())
     private val animRunnable = object : Runnable {
@@ -104,10 +104,9 @@ class FloatBallView(context: Context) : View(context) {
     // Public API
     // =========================================================
 
-    /** 更新额度目标值。动画会平滑追赶此值。 */
+    /** 更新额度目标值。动画会平滑追赶此值（0.6 秒完成大幅变化）。 */
     fun updateQuota(quota: Int) {
         _quota = quota.coerceIn(Constants.QUOTA_MIN, Constants.QUOTA_MAX)
-        // 不在此处触发动画 — 连续循环自动处理
     }
 
     /** 直接设置额度（无动画，首次显示时用） */

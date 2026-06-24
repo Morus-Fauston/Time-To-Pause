@@ -7,7 +7,7 @@ import com.ttp.pause.Constants
 /**
  * 短视频额度数据持久化
  *
- * 存储：当前额度、宽限结束时间戳、最后更新时刻
+ * 存储：当前额度、宽限结束时间戳、最后更新时刻、模式开关
  * 使用 SharedPreferences（数据量极小，无需 DataStore）
  */
 class QuotaStore(context: Context) {
@@ -16,7 +16,7 @@ class QuotaStore(context: Context) {
         context.getSharedPreferences(Constants.PREF_NAME, Context.MODE_PRIVATE)
 
     /**
-     * 当前短视频额度（0-100）
+     * 当前短视频额度（0-100，取整存储）
      */
     var quota: Int
         get() = prefs.getInt(Constants.KEY_QUOTA, Constants.QUOTA_MAX)
@@ -40,6 +40,13 @@ class QuotaStore(context: Context) {
     var lastTickTime: Long
         get() = prefs.getLong(Constants.KEY_LAST_TICK, System.currentTimeMillis())
         set(value) = prefs.edit().putLong(Constants.KEY_LAST_TICK, value).apply()
+
+    /**
+     * 是否启用旧版分钟级模式
+     */
+    var legacyMode: Boolean
+        get() = prefs.getBoolean(Constants.KEY_LEGACY_MODE, false)
+        set(value) = prefs.edit().putBoolean(Constants.KEY_LEGACY_MODE, value).apply()
 
     /**
      * 是否在宽限期内

@@ -40,6 +40,22 @@ class QuotaEngine {
     }
 
     /**
+     * 计算每秒变化量（Float，秒级精确模式使用）
+     *
+     * @return 每秒额度变化量，如白天看视频 = -10/60 ≈ -0.167
+     */
+    fun calculateDeltaPerSecond(
+        isWatching: Boolean,
+        isDayTime: Boolean
+    ): Float {
+        return if (isWatching) {
+            -(if (isDayTime) Constants.CONSUME_DAY.toFloat() else Constants.CONSUME_NIGHT.toFloat()) / 60f
+        } else {
+            (if (isDayTime) Constants.RECOVER_DAY.toFloat() else Constants.RECOVER_NIGHT.toFloat()) / 60f
+        }
+    }
+
+    /**
      * 判断给定时间是否为白天（06:00-23:00）
      */
     fun isDayTime(time: Long): Boolean {

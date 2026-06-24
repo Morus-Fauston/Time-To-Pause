@@ -23,7 +23,7 @@ class AppDetector(private val context: Context) {
         val currentTime = System.currentTimeMillis()
         val stats = usageStatsManager.queryUsageStats(
             UsageStatsManager.INTERVAL_DAILY,
-            currentTime - 1000 * 60 * 2, // 查询最近 2 分钟
+            currentTime - 1000 * 10, // 查询最近 10 秒（原 2 分钟，灵敏度提升）
             currentTime
         ) ?: return null
 

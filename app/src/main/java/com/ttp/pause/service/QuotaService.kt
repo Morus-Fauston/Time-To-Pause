@@ -19,14 +19,16 @@ import com.ttp.pause.ui.OverlayManager
 /**
  * 后台配额服务
  *
- * 胶水代码层。所有额度计算逻辑委托给 [QuotaEngine]。
- *
  * 核心职责：
- * 1. 每分钟 tick：检测前台 App → QuotaEngine 计算 → 持久化
+ * 1. 每秒 tick：检测前台 App → 秒级/分钟级（按模式）→ 持久化
  * 2. 管理宽限计时
  * 3. 通知栏显示当前状态
  * 4. 被杀重启后触发回溯恢复
  * 5. 通过 OverlayManager 控制悬浮球和宽限对话框
+ *
+ * 运行模式（设置中切换）：
+ * - 秒级模式（默认）：每秒按费率变化，精确平滑
+ * - 旧版分钟模式：每 60 秒 tick 一次，按分钟费率跳变
  */
 class QuotaService : Service() {
 
@@ -43,29 +45,80 @@ class QuotaService : Service() {
     private lateinit var overlayManager: OverlayManager
 
     private val handler = Handler(Looper.getMainLooper())
-    private val tickRunnable = object : Runnable {
-        override fun run() {
-            onTick()
-            handler.postDelayed(this, Constants.TICK_INTERVAL_MS)
-        }
-    }
 
-    // 每秒心跳 tick：推动悬浮球连续动画（即使额度未变化）
-    private val heartbeatRunnable = object : Runnable {
+    // ---- 秒级精确额度（仅秒级模式使用） ----
+    private var _exactQuota = Constants.QUOTA_MAX.toFloat()
+
+    // ---- 通用每秒循环：取代旧的 tickRunnable + heartbeatRunnable ----
+    private val secondRunnable = object : Runnable {
+        /** 旧版模式的 60 秒计数器 */
+        private var legacyCounter = 0
+
         override fun run() {
+            val now = System.currentTimeMillis()
+
             if (quotaStore.isInGracePeriod()) {
+                // 宽限冻结：不计算额度，仅更新通知 + UI
+                quotaStore.lastTickTime = now
+                updateNotification()
                 overlayManager.update(
                     quota = quotaStore.quota,
                     isWatching = false,
                     inGracePeriod = true
                 )
-            } else {
+                handler.postDelayed(this, 1000L)
+                return
+            }
+
+            if (quotaStore.legacyMode) {
+                // ======== 旧版分钟级模式 ========
+                legacyCounter++
+                if (legacyCounter >= 60) {
+                    legacyCounter = 0
+                    val isWatching = appDetector.isWatchingShortVideo()
+                    val delta = engine.calculateDelta(isWatching, engine.isDayTime(now))
+                    val newQuota = (quotaStore.quota + delta)
+                        .coerceIn(Constants.QUOTA_MIN, Constants.QUOTA_MAX)
+                    if (newQuota != quotaStore.quota) {
+                        quotaStore.quota = newQuota
+                    }
+                    quotaStore.lastTickTime = now
+                }
+                updateNotification()
                 overlayManager.update(
                     quota = quotaStore.quota,
                     isWatching = appDetector.isWatchingShortVideo(),
                     inGracePeriod = false
                 )
+            } else {
+                // ======== 秒级精确模式（默认） ========
+                // 检查外部是否有人直接改了 quota（如 DebugActivity）
+                if (kotlin.math.abs(_exactQuota - quotaStore.quota.toFloat()) > 0.5f) {
+                    _exactQuota = quotaStore.quota.toFloat()
+                }
+
+                val isWatching = appDetector.isWatchingShortVideo()
+                val deltaPerSec = engine.calculateDeltaPerSecond(
+                    isWatching, engine.isDayTime(now)
+                )
+                _exactQuota = (_exactQuota + deltaPerSec)
+                    .coerceIn(Constants.QUOTA_MIN.toFloat(), Constants.QUOTA_MAX.toFloat())
+
+                val rounded = _exactQuota.toInt()
+                if (rounded != quotaStore.quota) {
+                    quotaStore.quota = rounded
+                }
+                quotaStore.lastTickTime = now
+                updateNotification()
+
+                // 在看视频 + 额度为 0 → 蒙层
+                overlayManager.update(
+                    quota = rounded,
+                    isWatching = isWatching,
+                    inGracePeriod = false
+                )
             }
+
             handler.postDelayed(this, 1000L)
         }
     }
@@ -77,10 +130,11 @@ class QuotaService : Service() {
         appDetector = AppDetector(this)
         notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
 
+        _exactQuota = quotaStore.quota.toFloat()
+
         // 初始化悬浮窗管理器
         overlayManager = OverlayManager(this)
         overlayManager.onGraceGranted = {
-            // 宽限验证成功 → 开启宽限计时
             quotaStore.startGrace()
             overlayManager.removeGraceDialog()
             overlayManager.hideInterventionOverlay()
@@ -93,25 +147,32 @@ class QuotaService : Service() {
         // 回溯恢复：处理 Service 被杀期间的时间
         catchUpRecovery()
 
-        // 启动 tick 循环 + 心跳
-        handler.post(tickRunnable)
-        handler.post(heartbeatRunnable)
+        // 启动每秒循环
+        handler.post(secondRunnable)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // 每次 Activity 启动 Service 时，重新检查蒙层状态
         handler.post { checkAndApplyOverlay() }
         return START_STICKY
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(tickRunnable)
-        handler.removeCallbacks(heartbeatRunnable)
+        handler.removeCallbacks(secondRunnable)
         overlayManager.release()
         currentInstance = null
         super.onDestroy()
+    }
+
+    /** 外部（如 DebugActivity）修改额度后调用，同步浮点精度 */
+    fun syncExactQuota() {
+        _exactQuota = quotaStore.quota.toFloat()
+    }
+
+    /** 切换模式时调用，刷新内部状态 */
+    fun onModeChanged() {
+        _exactQuota = quotaStore.quota.toFloat()
     }
 
     /**
@@ -124,49 +185,8 @@ class QuotaService : Service() {
 
         val newQuota = (quotaStore.quota + recovered).coerceAtMost(Constants.QUOTA_MAX)
         quotaStore.quota = newQuota
+        _exactQuota = newQuota.toFloat()
         quotaStore.lastTickTime = now
-    }
-
-    /**
-     * 每分钟 tick 逻辑
-     *
-     * 胶水代码：读取状态 → 委托 QuotaEngine 计算 → 持久化
-     */
-    private fun onTick() {
-        val now = System.currentTimeMillis()
-
-        // 1. 是否在宽限期？
-        if (quotaStore.isInGracePeriod()) {
-            // 宽限期间：额度完全冻结——不消耗也不恢复，仅更新通知栏倒计时
-            quotaStore.lastTickTime = now
-            updateNotification()
-            overlayManager.update(
-                quota = quotaStore.quota,
-                isWatching = false,
-                inGracePeriod = true
-            )
-            return
-        }
-
-        // 2. 非宽限期：检测前台 App 并计算
-        val isWatching = appDetector.isWatchingShortVideo()
-        val delta = engine.calculateDelta(isWatching, engine.isDayTime(now))
-        val newQuota = (quotaStore.quota + delta)
-            .coerceIn(Constants.QUOTA_MIN, Constants.QUOTA_MAX)
-
-        if (newQuota != quotaStore.quota) {
-            quotaStore.quota = newQuota
-        }
-
-        quotaStore.lastTickTime = now
-        updateNotification()
-
-        // 3. 驱动所有悬浮 UI（悬浮球 + 蒙层）
-        overlayManager.update(
-            quota = newQuota,
-            isWatching = isWatching,
-            inGracePeriod = false
-        )
     }
 
     // ---- Notification ----
@@ -206,7 +226,6 @@ class QuotaService : Service() {
 
     /**
      * 供 Activity 恢复时调用：强制重新评估并显示蒙层
-     * 用于"退出 App 再回来，若额度为 0 则继续显示蒙层"
      */
     fun checkAndApplyOverlay() {
         if (quotaStore.isInGracePeriod()) {

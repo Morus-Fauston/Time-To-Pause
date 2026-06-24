@@ -20,8 +20,10 @@ object Constants {
     const val RECOVER_DAY = 5
     const val RECOVER_NIGHT = 3
 
-    // 定时器间隔（毫秒）
-    const val TICK_INTERVAL_MS = 60_000L
+    // 定时器间隔 — 秒级模式：1 秒，旧版模式：60 秒
+    const val TICK_INTERVAL_MS = 1000L
+    const val TICK_INTERVAL_LEGACY_MS = 60_000L
+    const val KEY_LEGACY_MODE = "legacy_mode"
 
     // 宽限时长
     const val GRACE_DURATION_SEC = 300L // 5 分钟

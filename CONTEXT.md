@@ -18,20 +18,17 @@
 净速率：白天 -5 点/分钟，夜间 -13 点/分钟。即看 1 分钟约需休息 2 分钟（白天）或 5 分钟（夜间）回本。
 
 ### 检测范围
-- **精准命中**：抖音、快手等纯短视频 App（包名白名单）— 事件驱动，秒级响应
+- **精准命中**：抖音、快手等纯短视频 App（包名白名单）— UsageStatsManager 10 秒窗口，每秒轮询
 - **B 站检测策略（保守）**：
-  - 仅 `StoryVideoActivity` / `FeedVideoActivity` 白名单 → 消耗
-  - `MainActivity`（首页混合流）→ 不消耗（宁可漏检不误伤）
-  - `VideoDetailsActivity`（长视频）→ 不消耗
-  - Activity 名称通过 `AccessibilityService` 实时获取
+  - v0.2.0 纯包名检测（不区分 B 站内部 Activity，全按短视频计）
+  - v0.3+ 计划通过 `AccessibilityService` 获取 Activity 名，区分短视频/长视频
 - **不检测**：微信视频号、浏览器网页版短视频等非主流入口——未来可扩展
 
 ### 后台计时架构
-- **事件驱动层**：`AccessibilityService` 监听 `TYPE_WINDOW_STATE_CHANGED`——应用切换时**即时**触发，记录包名 + Activity 名 + 时间戳
-- **结算层**：`ForegroundService` 内 `Handler.postDelayed(Ns)`——仅做数学结算（将累计停留秒数按费率转为额度变化），不参与检测
-- **检测与结算解耦**：两条独立的时间线互不依赖。事件驱动保证即时响应，定时器保证定期结算
-- **停留时长精确计算**：AccessibilityService 记录每次 enter/leave 时间戳 → 求差得到精确毫秒数 → 结算时按秒扣减
-- **兜底**：AccessibilityService 未启用时，自动降级为 `UsageStatsManager` 轮询（分钟级粗粒度，无 Activity 名）
+- **秒级实时模式（默认）**：`QuotaService` 内 `Handler.postDelayed(1s)` 的 `secondRunnable`——每秒执行：检测前台 App（UsageStatsManager 查 10 秒窗口）→ 按每秒费率（如 -10/60 ≈ -0.167）累加到 `_exactQuota`（Float）→ 取整持久化 → 驱动 UI 更新
+- **旧版分钟模式（备选）**：保留原 60 秒 tick + 心跳双线程方案，可在设置中切换
+- **追赶动画**：`FloatBallView` 以 166.67 点/秒速度追赶目标值，100 点变化约 0.6 秒完成
+- **未来升级**：v0.3+ 计划升级到 `AccessibilityService` 事件驱动，实现真实时 + Activity 名称检测
 
 ### 视觉干预蒙层
 - **方案**：`WindowManager` 全屏悬浮半透明覆盖层（非系统级颜色反转）
@@ -66,9 +63,9 @@
 ### 首次启动流
 1. **欢迎页**：展示 ⏸️ 图标 + "是时候，停一下了" + 模拟进度条动效 + 三行功能介绍
 2. **"开始使用"按钮** → 进入阶梯式权限引导
-3. **权限引导**：`BIND_ACCESSIBILITY_SERVICE`（无障碍）→ `SYSTEM_ALERT_WINDOW`（悬浮窗）→ 电池优化（推荐不强制）
+3. **权限引导**：`PACKAGE_USAGE_STATS`（使用情况访问）→ `SYSTEM_ALERT_WINDOW`（悬浮窗）→ 电池优化（推荐不强制）
 4. **开机自启选项**：默认关闭，用户可选开启
-5. **完成设置** → 启动 `ForegroundService` + `AccessibilityService`，进入正常运行
+5. **完成设置** → 启动 `ForegroundService`，进入正常运行
 
 ### UI 技术栈
 - **全量方案**：XML + View 体系（`WindowManager` 自定义 View + Activity XML 布局）
@@ -85,10 +82,11 @@
 - **选型理由**：数据量极小（4 个 key-value）、无需协程/Flow、减少依赖
 
 ### 权限策略（阶梯式引导）
-- **第一步（必须）**：引导开启 `BIND_ACCESSIBILITY_SERVICE` — 实时前台检测依赖（需在系统设置中搜索"无障碍"→"已安装的服务"中找到"停一下吧"并开启）
+- **第一步（必须）**：引导开启 `PACKAGE_USAGE_STATS` — 前台 App 检测依赖（使用情况访问权限）
 - **第二步（必须）**：引导开启 `SYSTEM_ALERT_WINDOW` — 悬浮球+蒙层依赖
 - **第三步（推荐，不强制）**：引导关闭电池优化 — 后台保活
-- **兜底降级模式**：若用户拒绝无障碍服务，自动 fallback 到 `PACKAGE_USAGE_STATS` 轮询（需单独引导开启）。功能降级为分钟级粗粒度、无 B 站 Activity 区分、无实时蒙层响应。
+- **默认模式**：`PACKAGE_USAGE_STATS` + `SYSTEM_ALERT_WINDOW` 即可完整运行秒级模式
+- **未来计划**：v0.3+ 增加 `BIND_ACCESSIBILITY_SERVICE` 步骤（无障碍服务），实现 B 站 Activity 检测和真实时响应
 
 ### 宽限机制
 - **触发**：悬浮球单击（额度为 0 时），或蒙层"申请宽限"按钮

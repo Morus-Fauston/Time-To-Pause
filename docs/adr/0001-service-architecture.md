@@ -16,13 +16,13 @@
 
 ### 职责变化
 
-| 职责 | v0.1.x（轮询阶段） | v0.2+（事件驱动阶段） |
+| 职责 | v0.1.x（轮询阶段） | v0.2.x+（秒级实时阶段） |
 |------|:---:|:---:|
-| 前台 App 检测 | Service tick 内主动查 UsageStats | **AccessibilityService** 事件触发 |
-| 停留时长记录 | ❌ 无（粗糙的 0/1） | **AccessibilityService** enter/leave 时间戳 |
-| 额度数学结算 | Service tick（60s） | Service tick（N 秒），按累计停留秒数计算 |
-| UI 更新（悬浮球/蒙层） | Service tick（60s）+ 心跳（1s） | Service tick（N 秒）+ 事件触发即时更新 |
-| 宽限倒计时 | Service tick + 心跳 | Service tick + 心跳 |
+| 前台 App 检测 | Service tick 内主动查 UsageStats（60s） | 每秒检测 UsageStats（窗口 10s），或 AccessibilityService 事件驱动 |
+| 额度计算 | 每分钟跳变 ±10/16/5/3（Int） | **每秒平滑变化** ±0.167/±0.083（Float 累积），或旧版分钟模式 |
+| 浮动进度 | 心跳 1s 更新显示，额度不跳 | **每秒真实变化**，追赶动画 0.6s 覆盖大幅调整 |
+| UI 更新（悬浮球/蒙层） | 心跳 + tick 双线程 | **单线程** secondRunnable 每秒同时做计算 + UI |
+| 旧版兼容 | 无 | 设置中可切回分钟级模式（legacy_mode）
 
 ### 间隔调整
 

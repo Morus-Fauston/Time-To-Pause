@@ -1,70 +1,74 @@
-# ADR-0003: 包名白名单 + Activity 名称检测 + AccessibilityService 事件驱动
+# ADR-0003: 包名白名单 + Activity 名称检测 — 秒级轮询，事件驱动为未来目标
 
 ## Status
 
-**Revised — 2026-06-25**。原方案（轮询 UsageStatsManager）已被事件驱动（AccessibilityService）替代。
+**Revised — 2026-06-25**。检测方案经历了三轮迭代：
+- **v0.1.x**：UsageStatsManager 60 秒轮询（已废弃）
+- **v0.2.0**：UsageStatsManager 10 秒窗口 + 1 秒 tick + Float 累积（**当前方案**）
+- **v0.3+**：AccessibilityService 事件驱动（计划，未实现）
 
 ## Context
 
-需要检测用户是否在看短视频。v0.1.2 之前的实现使用 `UsageStatsManager.queryUsageStats()` 每 60 秒**轮询**一次，存在以下根本性问题：
+需要检测用户是否在看短视频。检测方案的演进反映了"灵敏度 vs 可实施性"的权衡：
 
-1. **灵敏度极低**：60 秒才查一次，用户切到抖音刷 10 秒就退出，下次 tick 才会触发扣减
-2. **数据滞后**：`UsageStatsManager` 返回的 `lastTimeUsed` 可能滞后数秒到数分钟
-3. **无法精确计费**：只能按"这个 tick 内是否检测到短视频"做粗略的 0/1 判定，不知道用户实际停留了多久
-4. **架构反模式**：前台 App 切换是典型的"事件"而非"轮询"场景，轮询浪费 CPU 且体验差
-5. **B 站 Activity 名不可达**：纯包名检测判不准 B 站内的短视频/长视频区分
+### v0.1.x 的教训
+60 秒轮询存在根本性问题：灵敏度过低、数据滞后、无法精确计费、架构反模式。
+
+### v0.2.0 的改进（当前方案）
+在不动用 AccessibilityService 的前提下大幅提升检测精度的折中方案：
+
+1. **检测窗口缩短**：`queryUsageStats(INTERVAL_DAILY, now - 10s, now)` — 从 2 分钟缩至 10 秒
+2. **轮询间隔缩短**：`Handler.postDelayed(1s)` — 从 60 秒缩至 1 秒
+3. **Float 累积精度**：`_exactQuota` 浮点累加，每秒费率如 `-10/60 ≈ -0.167`，取整写回
+4. **追赶动画**：`FloatBallView` 以 0.6 秒完成大幅变化，弥补检测滞后
+
+此方案相比 v0.1.x 的灵敏度有质的提升，但仍是"近似实时"而非"真实时"。
 
 ## Decision
 
-采用 **AccessibilityService 监听前台窗口切换** 替代 UsageStatsManager 轮询，作为前台检测的主方案。包名白名单 + Activity 名称的检测逻辑不变。
+### 当前（v0.2.0）：秒级轮询
 
-### 新旧对比
+采用 `UsageStatsManager` 10 秒窗口 + 每秒检测作为前台检测的**主方案**。
 
-| 维度 | 旧方案（v0.1.2） | 新方案（v0.2+） |
+| 维度 | v0.1.x（旧） | v0.2.0（当前） |
 |------|:---:|:---:|
-| 触发方式 | `Handler.postDelayed(60s)` 轮询 | `AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED` 事件驱动 |
-| 检测延迟 | ≤60 秒（最坏情况） | 即时（应用切换瞬间） |
-| 停留精度 | 分钟级（粗糙的 0/1） | 毫秒级（记录 enter/leave 时间戳） |
-| 消耗结算 | 每次 tick 扣 10 或 16 点 | 按实际停留秒数 × 每秒费率 |
-| 定时器作用 | 检测 + 计算 + UI 更新 | 仅做额度数学结算 + UI 更新 |
-| B 站 Activity | 不支持（纯包名） | 支持（可获取 Activity 名称） |
+| 轮询间隔 | 60 秒 | **1 秒** |
+| 查询窗口 | 2 分钟 | **10 秒** |
+| 额度精度 | Int 跳变 | **Float 累积** |
+| 追赶动画 | 30 秒 | **0.6 秒** |
+| 旧版兼容 | 无 | **分钟级作为备选** |
 
-### 精确停留时长计算
+### 未来（v0.3+）：AccessibilityService 事件驱动
 
-```
-用户切到抖音 → 记录 enterTime = T1, 包名 = "抖音"
-用户切回桌面 → 记录 leaveTime = T2
-→ 停留时长 = T2 - T1 → 按每秒费率结算 (如 10/60 点/秒)
-```
-
-此设计使额度扣减与用户实际观看时长精确对应，不再依赖粗糙的分钟级 tick。
+计划升级到 `AccessibilityService` 监听 `TYPE_WINDOW_STATE_CHANGED`，获取：
+- 即时包名（应用切换瞬间触发）
+- Activity 名称（B 站短视频/长视频区分）
 
 ## Considered Options
 
-- **截图 + 图像识别** — 同上轮 ADR，仍不采用。隐私风险 + 性能开销。
-- **UsageStatsManager 缩短间隔** — 即便改为 5 秒轮询，仍有滞后且徒增 CPU 消耗，治标不治本。
-- **`registerUsageStatsObserver`（API 31+）** — 理论上可监听前台变化，但仅 Android 12+ 支持，覆盖率不足且国产 ROM 兼容性未知。
-- **AccessibilityService — 首选**：最低支持 API 14，事件即时触发，可获取 Activity 名称，权限引导路径成熟。
+- **截图 + 图像识别** — 隐私风险 + 性能开销，不采用
+- **`registerUsageStatsObserver`（API 31+）** — 仅 Android 12+，覆盖率不足
+- **秒级轮询（当前选择）** — 不动用无障碍权限，灵敏度提升显著，实施成本低
+- **AccessibilityService（未来目标）** — 真实时 + Activity 名，但权限门槛高
 
 ## Consequences
 
-### 正面
-- 检测从"事后追溯"变为"实时触发"，用户体验极大提升
-- 停留时长精确到毫秒，扣费公平合理
-- 可获取 Activity 名称，B 站短视频检测成为现实
-- 移除对 `PACKAGE_USAGE_STATS` 的核心依赖（但保留作为备选兜底）
-- `HeartbeatRunnable` 也可简化或移除
+### 正面（当前方案）
+- 无需 AccessibilityService 权限，用户接受度高
+- 灵敏度比 v0.1.x 大幅提升（1 秒 vs 60 秒）
+- Float 累积消除取整误差，每次变化肉眼可见
+- 旧版分钟模式保留，用户可自主选择
+- 追赶动画弥补了轮询的"滞后感"
 
 ### 负面
-- **新增权限负担**：需要 `BIND_ACCESSIBILITY_SERVICE` 权限 —— 用户需要在系统设置中手动开启无障碍服务，路径长且各品牌不同
-- **国产 ROM 限制**：OPPO、vivo 等品牌对无障碍服务的保活/自启有严格限制，可能与 `QuotaService` 面临相同问题
-- **用户信任门槛**：无障碍服务权限常被用于恶意行为（自动抢红包、自动安装等），部分用户可能抵触
-- **包名 + Activity 名规则仍需维护**
+- 仍不是真正的"事件驱动"——切换应用后最多等 1 秒才响应
+- `UsageStatsManager` 在某些国产 ROM 上可能返回空数据
+- 无法获取 Activity 名称（B 站短视频/长视频无法区分）
+- `queryUsageStats` 缩短到 10 秒在某些设备上可能返回空集
 
-## Why This Is Surprising
+## Future Direction
 
-v1.0 选择 UsageStatsManager 时已经"保守地"避开了 AccessibilityService。但实际使用后暴露了轮询方案的硬伤 —— 无法精确计费意味着额度扣减与用户实际行为脱节。最终 AccessibilityService 并非因"功能强大"而被选，而是因"轮询方案不够精确"而被逼到这条路上。
-
-## Deprecation
-
-原 ADR-0003 中关于 UsageStatsManager 轮询的内容已被本文替代。`UsageStatsManager` 的相关代码保留为**兜底 fallback**，当 AccessibilityService 未启用时使用，保证最小可用模式。
+v0.3+ 如决定升级到 AccessibilityService，本文档需要再次修订。届时：
+- `AppDetector` 重构为事件驱动 + 停留时长记录
+- `QuotaService.secondRunnable` 简化（不再需要每秒检测，仅做结算 + UI）
+- B 站 Activity 白名单正式投入使用

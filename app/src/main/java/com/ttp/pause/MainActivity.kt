@@ -44,7 +44,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dashboardContainer: ConstraintLayout
 
     // 仪表盘控件
-    private lateinit var dashboardQuotaCircle: TextView
+    private lateinit var dashboardQuotaCircle: com.ttp.pause.ui.QuotaCircleView
     private lateinit var dashboardQuotaLabel: TextView
     private lateinit var dashboardStatus: TextView
     private lateinit var dashboardGraceInfo: TextView
@@ -186,16 +186,8 @@ class MainActivity : AppCompatActivity() {
     /** 更新仪表盘额度显示 */
     private fun updateDashboardQuota() {
         val quota = quotaStore.quota
-        dashboardQuotaCircle.text = "$quota"
+        dashboardQuotaCircle.setQuota(quota)
         dashboardQuotaLabel.text = "剩余额度 $quota%"
-
-        // 更新颜色
-        val color = when {
-            quota >= 60 -> getColor(R.color.quota_high)
-            quota >= 30 -> getColor(R.color.quota_medium)
-            else -> getColor(R.color.quota_low)
-        }
-        dashboardQuotaCircle.setTextColor(color)
 
         // 宽限状态
         if (quotaStore.isInGracePeriod()) {
@@ -208,25 +200,34 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 显示简单设置弹窗 */
+    /** 显示设置弹窗 */
     private fun showSettingsDialog() {
-        val items = arrayOf("重新引导权限", "调试模式", "关闭应用")
+        val isLegacy = quotaStore.legacyMode
+        val modeLabel = if (isLegacy) "切换到秒级模式（推荐）" else "切换到旧版（分钟级）"
+        val items = arrayOf(modeLabel, "重新引导权限", "调试模式", "关闭应用")
         AlertDialog.Builder(this)
             .setTitle("设置")
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> {
-                        // 重新引导权限
+                        // 切换模式
+                        quotaStore.legacyMode = !isLegacy
+                        QuotaService.currentInstance?.onModeChanged()
+                        Toast.makeText(
+                            this,
+                            if (!isLegacy) "已切换到旧版分钟级模式" else "已切换到秒级精确模式",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    1 -> {
                         getSharedPreferences(Constants.PREF_NAME, Context.MODE_PRIVATE)
                             .edit().putBoolean("setup_completed", false).apply()
                         startPermissionGuide()
                     }
-                    1 -> {
-                        // 调试模式
+                    2 -> {
                         startActivity(Intent(this, com.ttp.pause.ui.DebugActivity::class.java))
                     }
-                    2 -> {
-                        // 关闭应用
+                    3 -> {
                         stopService(Intent(this, QuotaService::class.java))
                         finishAffinity()
                     }

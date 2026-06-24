@@ -155,19 +155,12 @@
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
 
-        <!-- 中央额度圆形指示器 -->
-        <TextView
+        <!-- 中央额度环形指示器（悬浮球同款视觉） -->
+        <com.ttp.pause.ui.QuotaCircleView
             android:id="@+id/dashboardQuotaCircle"
             android:layout_width="140dp"
             android:layout_height="140dp"
             android:layout_marginTop="40dp"
-            android:gravity="center"
-            android:text="100"
-            android:textSize="48sp"
-            android:textColor="@color/text_primary"
-            android:textStyle="bold"
-            android:background="@drawable/ic_pause_circle"
-            android:backgroundTint="@color/quota_high"
             app:layout_constraintTop_toBottomOf="@id/dashboardTitle"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent" />
