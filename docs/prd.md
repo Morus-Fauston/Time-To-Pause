@@ -1,6 +1,6 @@
 # PRD: 「停一下吧 (Time To Pause)」
 
-> 版本: 1.3 | 日期: 2026-06-26 | 状态: Draft
+> 版本: 1.4 | 日期: 2026-06-25 | 状态: Draft
 
 ---
 
@@ -20,8 +20,8 @@
 
 - **额度**：0-100 点。刷短视频消耗，停止恢复。**无每日重置**，完全靠自然行为调节。
 - **宽限**：答题换 5 分钟。宽限期间**额度完全冻结**——不消耗也不恢复，仅暂停干预。
-- **悬浮球**：Service 运行期间**始终显示**，环形进度条以连续平滑动画模拟时间流逝感。
-- **蒙层**：不拦截下层触控，颜色偏浅，带"返回"按钮可主动关闭。再次进入短视频仍为 0 时重新触发。
+- **悬浮球**：默认始终显示（可在设置中关闭：仅在看短视频时显示）。宽限期间切换为倒计时模式（剩余秒数 + 外圈进度环递减）。
+- **蒙层**：非对抗性视觉干预。可选两种方向——**温和干预**（渐变呼吸动画，强调自我觉察）或**视觉剥夺**（漂白+背景模糊+动态噪点，各三档强度）。不拦截下层触控。
 - **检测**：AccessibilityService 事件驱动（推荐），未开启时自动降级到 5 秒窗口轮询备选。
 
 ## User Stories
@@ -62,6 +62,11 @@
 ### 视觉与交互
 23. 作为一个喜欢视觉自定义的用户，我希望蒙层有不同模式可切换（漂白/渐变呼吸），以便选择自己喜欢的风格。
 24. 作为一个手机上有多种短视频 App 的用户，我希望检测覆盖抖音、快手、TikTok、微视等主流平台，以便所有平台都能统一管理。
+25. 作为一个宽限期的用户，我希望悬浮球在宽限期间显示倒计时（外圈环形进度递减），以便直观感知剩余缓冲时间。
+26. 作为一个不想被悬浮球一直打扰的用户，我可以在设置中选择"仅在看短视频时显示悬浮球"，以便桌面/其他 App 时不被干扰。
+27. 作为一个被蒙层打断后仍想继续刷的用户，我希望关闭蒙层后有 30 秒防打扰期，30 秒后如果还在刷则蒙层重新出现，以便不被频繁打断但有节奏地提醒。
+28. 作为一个喜欢视觉自定义的用户，我希望在设置中选择蒙层方向（温和的呼吸渐变 / 强力的视觉剥夺），以便符合个人偏好。
+29. 作为一个想要临时停用服务的用户，我可以在通知栏点击"暂停服务"按钮，以便需要专注其他事情时不被额度提醒干扰。
 
 ## Implementation Decisions
 
@@ -69,7 +74,7 @@
 
 项目按职责划分为以下模块，对应 `com.ttp.pause` 包下的子包：
 
-- **detector**（`AppDetector` + `ForegroundMonitorService`）— 前台应用检测。**主方案（默认）**：`ForegroundMonitorService`（AccessibilityService）通过 `TYPE_WINDOW_STATE_CHANGED` 事件实时获取前台包名。**备选方案**：`UsageStatsManager` 5 秒窗口轮询（每秒执行），在 AccessibilityService 未连接时自动降级。包名匹配通过 `AppDetector.isShortVideoApp()` 和 `isBilibili()` 完成。B 站等复合 App 当前仅通过包名检测，未来 AccessibilityService 可获取 Activity 名称以区分短视频/长视频。
+- **detector**（`AppDetector` + `ForegroundMonitorService`）— 前台应用检测。**主方案（默认）**：`ForegroundMonitorService`（AccessibilityService）通过 `TYPE_WINDOW_STATE_CHANGED` 事件实时获取前台包名。**备选方案**：`UsageStatsManager` 5 秒窗口轮询（每秒执行），在 AccessibilityService 未连接时自动降级。包名匹配通过 `AppDetector.isShortVideoApp()` 和 `isBilibili()` 完成。B 站通过 `BILIBILI_SHORT_VIDEO_ACTIVITIES` 白名单区分短视频/长视频（仅 AccessibilityService 模式下生效，降级轮询时全按短视频计）。
 - **data**（`QuotaStore`）— 额度持久化。使用 `SharedPreferences` 存储 3 个字段：`quota`（0-100）、`grace_end_timestamp`（宽限结束时间戳）、`last_tick_time`（最后更新时刻）。数据量极小（仅 3 个 key-value），无需 DataStore。
 - **service**（`QuotaService`）— 后台核心驱动力。`ForegroundService` 内 `Handler.postDelayed(1s)` 循环（`secondRunnable`），每秒统一执行：检测前台 App（优先读 `ForegroundMonitorService.lastForegroundPackage`，降级读 `AppDetector`）→ 按每秒费率（Float）累加到 `_exactQuota` → 取整持久化 → 驱动 UI 更新。同时负责宽限计时、通知栏更新、回溯恢复。
 - **receiver**（`BootReceiver`）— 开机自启。通过 `PackageManager.setComponentEnabledSetting` 动态启用/禁用（默认关闭），用户可在初始化引导中选择开启。
@@ -126,7 +131,12 @@
 
 一个好的测试只验证外部行为，不验证实现细节。具体来说，应该测试"给定输入 X，输出是否为 Y"，而不是测试"内部状态 Z 是否被设置为特定值"。
 
-### 测试策略层级
+### 测试策略（分阶段推进）
+
+**阶段 A（v0.2.x revised）**：只测无 Android 依赖的纯逻辑层。
+**阶段 B（v0.4.x）**：搭建完整 Android 测试框架（JUnit 5 + Mockito + Robolectric），覆盖所有模块。
+
+### 阶段 A — `QuotaEngine` 纯逻辑测试
 
 | 层级 | 目标 | 框架 | 职责 |
 | :--- | :--- | :--- | :--- |
@@ -178,8 +188,8 @@ QuotaEngineTest
 - 仪表盘 + 调试模式 + 连续平滑动画
 - 已知问题：检测灵敏度低，停留时长无法精确计算
 
-### v0.2.x — AccessibilityService 实时检测（当前阶段）
-> 当前版本: v0.2.0
+### v0.2.x — AccessibilityService 实时检测 + Bug 修复（当前阶段）
+> 当前版本: v0.2.0.revised.3
 
 | 功能 | 说明 | 状态 |
 |:-----|:-----|:----:|
@@ -188,30 +198,33 @@ QuotaEngineTest
 | 即时蒙层响应 | 切回短视频且额度 0 → 蒙层瞬间出现 | ✅ 已完成 |
 | 权限引导更新 | 新增无障碍权限引导步骤（第零步） | ✅ 已完成 |
 | 通知栏模式标识 | 显示"(实时)"或"(轮询)"模式 | ✅ 已完成 |
-| 旧版分钟模式移除 | 删除 legacyMode | ✅ 已完成 |
-| B 站 Activity 检测 | 利用 AccessibilityService 获取 Activity 名，区分短视频/长视频 | ⬜ 待实现 |
+| B 站 Activity 检测 | 利用 AccessibilityService 获取 Activity 名，区分短视频/长视频 | ✅ 已完成 |
+| 键盘输入法中断修复 | 输入法包名不覆盖 `lastForegroundPackage`（方案 A） | ⬜ 待实现 |
+| 切出短视频蒙层残留修复 | `OverlayManager.update()` 缺少"不在看→隐藏"分支 | ⬜ 待实现 |
+| 宽限时悬浮球倒计时模式 | 宽限期间悬浮球显示剩余秒数 + 外圈进度环递减 | ⬜ 待实现 |
+| 悬浮球始终显示可选 | 设置中增加"仅在看短视频时显示悬浮球"开关 | ⬜ 待实现 |
+| 关闭蒙层后 30 秒防打扰 + 循环干预 | 关闭后 30 秒内不再弹出，超时后继续阻遏 | ⬜ 待实现 |
 
-### v0.3.x — 精确度与体验优化
-> 下一阶段
-
-| 功能 | 说明 | 优先级 |
-|:-----|:-----|:------:|
-| B 站 Activity 检测 | 利用 AccessibilityService 获取 Activity 名，区分短视频/长视频 | P0 |
-| 通知栏快捷操作 | 点击通知打开仪表盘 / 暂停服务 | P1 |
-| `QuotaCircleView` 仪表盘优化 | 接入真实数据 | P1 |
-| 单元测试覆盖 | QuotaEngine / AppDetector / ForegroundMonitorService | P1 |
-
-### v1.0 — 可发布版本
+### v0.3.x — 体验优化与 UI 重构
 
 | 功能 | 说明 | 优先级 |
 |:-----|:-----|:------:|
-| 远程白名单更新 | Firebase Remote Config 或自建 JSON API | P0 |
-| 厂商保活适配 | 华为/小米/OPPO/vivo 各品牌后台策略调研与引导适配 | P0 |
-| 单元测试覆盖 | QuotaEngine / AppDetector / 算术验证 | P1 |
+| 通知栏快捷操作 | 单行额度进度条 + 展开后"打开仪表盘"和"暂停服务(10min/可调)"按钮 | P0 |
+| 蒙层分两层重构 | 视觉层(NOT_TOUCHABLE) + 按钮层分离，蒙层区域触控穿透 | P0 |
+| 蒙层方向与效果可配置 | 温和干预(渐变呼吸) / 视觉剥夺(漂白+模糊+噪点，各三档) | P1 |
+| QuotaEngine 单元测试 | JUnit 5 纯逻辑测试（无 Android 依赖） | P1 |
+| 远程白名单（GitHub Raw） | B 站 Activity 白名单通过 GitHub Raw JSON 热更新 | P1 |
+
+### v0.4.x — 可发布版本
+
+| 功能 | 说明 | 优先级 |
+|:-----|:-----|:------:|
+| 完整 Android 测试框架 | Mockito + Robolectric，覆盖 AppDetector / ForegroundMonitorService / QuotaService | P1 |
 | 性能优化 | 确保后台 CPU < 3% | P1 |
 | 隐私合规文档 | 用户协议 + 隐私政策 | P1 |
+| 厂商保活适配 | 运行时检测品牌→引导用户设置（有用户反馈后再做） | P2 |
 
-### v2.0+ — 扩展方向
+### v0.5.x+ — 扩展方向（远期）
 
 - 微信视频号 / 浏览器 WebView 检测（需更高阶检测技术）
 - 使用趋势数据统计（日报/周报）
@@ -220,12 +233,12 @@ QuotaEngineTest
 
 ## Out of Scope
 
-- **微信视频号、浏览器网页版短视频等非主流入口的检测**。技术成本高（需识别子页面/WebView），且与"专注纯短视频 App"的产品定位一致。留作未来扩展（v2.0+）。
+- **微信视频号、浏览器网页版短视频等非主流入口的检测**。技术成本高（需识别子页面/WebView），且与"专注纯短视频 App"的产品定位一致。留作未来扩展（v0.5.x+）。
 - **系统级颜色反转**。`ACCESSIBILITY_DISPLAY_INVERSION_ENABLED` 是系统级开关，开启后全局反转（短信、设置等全被反转），不可接受。采用悬浮蒙层漂白方案替代。
 - **OCR/深度学习/截图分析**。违反隐私"零上传"原则和性能"CPU < 3%"要求。
 - **iOS 版本**。本 PRD 仅覆盖 Android 平台。
-- **多语言支持**。v1.0 仅支持中文界面。
-- **数据统计仪表盘**。v1.0 不提供历史数据图表、使用趋势分析等功能。
+- **多语言支持**。v0.4.x 仅支持中文界面。
+- **数据统计仪表盘**。v0.4.x 不提供历史数据图表、使用趋势分析等功能。
 - **社交/排行榜功能**。不与好友比拼、不设排名。
 
 ## Further Notes
@@ -236,7 +249,7 @@ QuotaEngineTest
 
 ### 白名单维护
 
-B 站的 Activity 名称随 App 版本更新可能变化。建议在 v1.1 引入远程配置机制（如 Firebase Remote Config 或自建简单 JSON API），使白名单可以热更新而不需要发版。但 v1.0 采用硬编码内置列表。
+B 站的 Activity 名称随 App 版本更新可能变化。v0.3.x 引入 GitHub Raw JSON 远程配置机制，使 B 站 Activity 白名单可以热更新而不需要发版。
 
 ## 成功指标参考
 

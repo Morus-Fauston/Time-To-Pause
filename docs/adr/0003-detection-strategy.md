@@ -2,7 +2,7 @@
 
 ## Status
 
-**Revised — 2026-06-26**。检测方案经过四轮迭代：
+**Revised — 2026-06-25**。检测方案经过四轮迭代：
 - **v0.1.x**：UsageStatsManager 60 秒轮询（已废弃）
 - **v0.2.0 早期**：UsageStatsManager 10 秒窗口 + Float 累积（中间态，被取代）
 - **v0.2.0（当前）**：**AccessibilityService 事件驱动为主** + UsageStatsManager 5 秒轮询备选
@@ -101,21 +101,29 @@ AccessibilityService 在 Android 上是最可靠的前台检测手段。其主�
 ## Consequences
 
 ### 正面（当前方案）
-- 无需 AccessibilityService 权限，用户接受度高
-- 灵敏度比 v0.1.x 大幅提升（1 秒 vs 60 秒）
-- Float 累积消除取整误差，每次变化肉眼可见
-- 旧版分钟模式保留，用户可自主选择
-- 追赶动画弥补了轮询的"滞后感"
+- **实时检测**：事件驱动，切换 App 即时感知
+- **优雅降级**：无障碍未开启时自动使用轮询
+- **松耦合**：`ForegroundMonitorService` 通过 static + 回调与 `QuotaService` 通信
 
 ### 负面
-- 仍不是真正的"事件驱动"——切换应用后最多等 1 秒才响应
-- `UsageStatsManager` 在某些国产 ROM 上可能返回空数据
-- 无法获取 Activity 名称（B 站短视频/长视频无法区分）
-- `queryUsageStats` 缩短到 10 秒在某些设备上可能返回空集
+- **增加权限引导步骤**：用户需在系统设置中开启无障碍
+- **双检测路径测试**：需覆盖 AccessibilityService 连/断两种场景
+
+## Alternatives Considered
+
+### UsageStats 1 秒窗口
+可达近似实时，但部分厂商系统 `queryUsageStats` 短窗口返回为空，不可靠。
+
+### 纯 AccessibilityService（无备选）
+过于激进，用户拒绝无障碍则完全无法检测，已排除。
+
+### 无障碍 + 前台双检测
+额外复杂度与收益不成正比，已排除。
 
 ## Future Direction
 
-v0.3+ 如决定升级到 AccessibilityService，本文档需要再次修订。届时：
-- `AppDetector` 重构为事件驱动 + 停留时长记录
-- `QuotaService.secondRunnable` 简化（不再需要每秒检测，仅做结算 + UI）
-- B 站 Activity 白名单正式投入使用
+已知待改进项：
+
+- **键盘输入法包名覆盖**：输入法弹出时 `packageName` 非 null，覆盖 `lastForegroundPackage` 导致检测丢失。计划通过输入法包名白名单在事件入口拦截（方案 A）
+- **B 站 Activity 白名单远程更新**：B 站版本更新可能导致 Activity 名变化，计划通过 GitHub Raw JSON 热更新
+- **`isEffectivelyConnected` 短视频包名信任副作用**：revised.2 信任短视频包名无超时 + revised.3 null 不覆盖 → 切出后包名残留，需增加"最近是否有 null 事件"的判断
