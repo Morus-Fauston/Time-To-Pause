@@ -32,4 +32,6 @@
     <string name="btn_cancel">取消</string>
     <string name="grace_dialog_cancel">关闭</string>
     <string name="overlay_dismiss">返回</string>
+    <string name="perm_accessibility_title">开启无障碍服务（推荐）</string>
+    <string name="perm_accessibility_desc">开启后可实现实时前台检测，额度变化更灵敏。如跳过将使用轮询模式作为备选。</string>
 </resources>

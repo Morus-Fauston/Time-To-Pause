@@ -202,32 +202,20 @@ class MainActivity : AppCompatActivity() {
 
     /** 显示设置弹窗 */
     private fun showSettingsDialog() {
-        val isLegacy = quotaStore.legacyMode
-        val modeLabel = if (isLegacy) "切换到秒级模式（推荐）" else "切换到旧版（分钟级）"
-        val items = arrayOf(modeLabel, "重新引导权限", "调试模式", "关闭应用")
+        val items = arrayOf("重新引导权限", "调试模式", "关闭应用")
         AlertDialog.Builder(this)
             .setTitle("设置")
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> {
-                        // 切换模式
-                        quotaStore.legacyMode = !isLegacy
-                        QuotaService.currentInstance?.onModeChanged()
-                        Toast.makeText(
-                            this,
-                            if (!isLegacy) "已切换到旧版分钟级模式" else "已切换到秒级精确模式",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                    1 -> {
                         getSharedPreferences(Constants.PREF_NAME, Context.MODE_PRIVATE)
                             .edit().putBoolean("setup_completed", false).apply()
                         startPermissionGuide()
                     }
-                    2 -> {
+                    1 -> {
                         startActivity(Intent(this, com.ttp.pause.ui.DebugActivity::class.java))
                     }
-                    3 -> {
+                    2 -> {
                         stopService(Intent(this, QuotaService::class.java))
                         finishAffinity()
                     }
@@ -261,7 +249,37 @@ class MainActivity : AppCompatActivity() {
     // ---- 阶梯式权限引导 ----
 
     private fun startPermissionGuide() {
-        step1_usageStats()
+        step0_accessibility()
+    }
+
+    /**
+     * 第零步：无障碍服务（推荐，事件驱动实时检测）
+     */
+    private fun step0_accessibility() {
+        if (com.ttp.pause.detector.ForegroundMonitorService.isConnected) {
+            step1_usageStats()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.perm_accessibility_title)
+            .setMessage(R.string.perm_accessibility_desc)
+            .setPositiveButton(R.string.perm_go_settings) { _, _ ->
+                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+                Toast.makeText(this, "请找到「停一下吧」并开启无障碍服务", Toast.LENGTH_LONG).show()
+                handler.postDelayed({
+                    step1_usageStats()
+                }, 3000)
+            }
+            .setNegativeButton(R.string.perm_skip) { _, _ ->
+                Toast.makeText(this, "将使用轮询模式（5秒窗口）", Toast.LENGTH_SHORT).show()
+                step1_usageStats()
+            }
+            .setCancelable(false)
+            .show()
     }
 
     /**

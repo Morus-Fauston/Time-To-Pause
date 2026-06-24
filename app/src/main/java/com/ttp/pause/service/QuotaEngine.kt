@@ -18,30 +18,14 @@ import java.util.Calendar
 class QuotaEngine {
 
     // =========================================================
-    // 消耗/恢复计算
+    // 消耗/恢复计算（秒级精度）
     // =========================================================
 
     /**
-     * 计算单次 tick 的额度变化量（正值 = 恢复，负值 = 消耗）
+     * 计算每秒变化量（Float）
      *
      * @param isWatching 当前是否在看短视频
      * @param isDayTime 当前是否为白天时段
-     * @return 变化量，范围 [-16, 5]
-     */
-    fun calculateDelta(
-        isWatching: Boolean,
-        isDayTime: Boolean
-    ): Int {
-        return if (isWatching) {
-            -if (isDayTime) Constants.CONSUME_DAY else Constants.CONSUME_NIGHT
-        } else {
-            if (isDayTime) Constants.RECOVER_DAY else Constants.RECOVER_NIGHT
-        }
-    }
-
-    /**
-     * 计算每秒变化量（Float，秒级精确模式使用）
-     *
      * @return 每秒额度变化量，如白天看视频 = -10/60 ≈ -0.167
      */
     fun calculateDeltaPerSecond(

@@ -1,6 +1,6 @@
 # PRD: 「停一下吧 (Time To Pause)」
 
-> 版本: 1.2 | 日期: 2026-06-25 | 状态: Draft
+> 版本: 1.3 | 日期: 2026-06-26 | 状态: Draft
 
 ---
 
@@ -22,7 +22,7 @@
 - **宽限**：答题换 5 分钟。宽限期间**额度完全冻结**——不消耗也不恢复，仅暂停干预。
 - **悬浮球**：Service 运行期间**始终显示**，环形进度条以连续平滑动画模拟时间流逝感。
 - **蒙层**：不拦截下层触控，颜色偏浅，带"返回"按钮可主动关闭。再次进入短视频仍为 0 时重新触发。
-- **模式切换**：默认秒级模式（每秒检测 + Float 累积），可在设置中切回旧版分钟级。
+- **检测**：AccessibilityService 事件驱动（推荐），未开启时自动降级到 5 秒窗口轮询备选。
 
 ## User Stories
 
@@ -69,18 +69,18 @@
 
 项目按职责划分为以下模块，对应 `com.ttp.pause` 包下的子包：
 
-- **detector**（`AppDetector`）— 前台应用检测。**主方案（当前）**：`UsageStatsManager` 查询 10 秒窗口，每秒轮询一次。配合秒级 tick 实现近似实时效果。**未来升级**：AccessibilityService 事件驱动（v0.3+ 计划），可获取 Activity 名称、B 站短视频区分。纯短视频 App 仅匹配包名；B 站等复合 App 需要包名 + Activity 名称双重校验。
-- **data**（`QuotaStore`）— 额度持久化。使用 `SharedPreferences` 存储 4 个字段：`quota`（0-100）、`grace_end_timestamp`（宽限结束时间戳）、`last_tick_time`（最后更新时刻）。数据量极小（仅 4 个 key-value），无需 DataStore。
-- **service**（`QuotaService`）— 后台核心驱动力。`ForegroundService` 内 `Handler.postDelayed(1s)` 循环（`secondRunnable`），每秒统一执行：检测前台 App → 按每秒费率（Float）累加到 `_exactQuota` → 取整持久化 → 驱动 UI 更新。旧版分钟模式（60 秒 tick）作为备选可在设置中切换。Service 同时负责宽限计时、通知栏更新、回溯恢复。
+- **detector**（`AppDetector` + `ForegroundMonitorService`）— 前台应用检测。**主方案（默认）**：`ForegroundMonitorService`（AccessibilityService）通过 `TYPE_WINDOW_STATE_CHANGED` 事件实时获取前台包名。**备选方案**：`UsageStatsManager` 5 秒窗口轮询（每秒执行），在 AccessibilityService 未连接时自动降级。包名匹配通过 `AppDetector.isShortVideoApp()` 和 `isBilibili()` 完成。B 站等复合 App 当前仅通过包名检测，未来 AccessibilityService 可获取 Activity 名称以区分短视频/长视频。
+- **data**（`QuotaStore`）— 额度持久化。使用 `SharedPreferences` 存储 3 个字段：`quota`（0-100）、`grace_end_timestamp`（宽限结束时间戳）、`last_tick_time`（最后更新时刻）。数据量极小（仅 3 个 key-value），无需 DataStore。
+- **service**（`QuotaService`）— 后台核心驱动力。`ForegroundService` 内 `Handler.postDelayed(1s)` 循环（`secondRunnable`），每秒统一执行：检测前台 App（优先读 `ForegroundMonitorService.lastForegroundPackage`，降级读 `AppDetector`）→ 按每秒费率（Float）累加到 `_exactQuota` → 取整持久化 → 驱动 UI 更新。同时负责宽限计时、通知栏更新、回溯恢复。
 - **receiver**（`BootReceiver`）— 开机自启。通过 `PackageManager.setComponentEnabledSetting` 动态启用/禁用（默认关闭），用户可在初始化引导中选择开启。
 
 ### 架构决策
 
 - **后台 tick 采用 ForegroundService + Handler，不用 WorkManager**。WorkManager 最小间隔 15 分钟，不满足更新需求。Service 内 Handler 是进程内轻量定时器。（参见 ADR-0001）
 - **全量使用 XML + View 体系，不用 Jetpack Compose**。VS Code 对 Compose 无实时预览；悬浮球和蒙层需要 `WindowManager` 直接操作 View 层级，Compose 在此场景下不受支持。（参见 ADR-0002）
-- **检测采用 UsageStatsManager 10s 窗口 + 秒级轮询，不用内容分析**。v0.1.x 曾用 60 秒轮询（灵敏度过低），v0.2.0 升级为 1 秒 tick + 10 秒窗口 + Float 累积精度。AccessibilityService 事件驱动为 v0.3+ 计划。所有检测在本地完成、不上传任何数据。（参见 ADR-0003）
+- **检测采用 AccessibilityService 事件驱动（主方案）+ UsageStats 5s 轮询（备选），不用内容分析**。AccessibilityService 监听 `TYPE_WINDOW_STATE_CHANGED` 实现实时前台检测，未开启时降级到 UsageStatsManager 5 秒窗口轮询。所有检测在本地完成、不上传任何数据。（参见 ADR-0003）
 - **UI 技术栈**：XML + AppCompat + ConstraintLayout + WindowManager（悬浮球/蒙层）。
-- **检测与结算合一**：单个 `secondRunnable` 每秒同时做检测、计算、UI 更新。旧版分钟模式（60 秒 tick + 心跳）作为备选。
+- **检测与结算合一**：单个 `secondRunnable` 每秒同时做检测、计算、UI 更新。
 
 ### 核心状态机
 
@@ -119,8 +119,7 @@
 
 - 宽限期间**不可叠加**——额度完全冻结，不消耗不恢复，通知栏显示倒计时
 - 非短视频 App 在前台时，额度为 0 也不显示蒙层
-- **秒级精确结算（默认模式）**：`QuotaService` 每秒执行，`UsageStatsManager` 查 10 秒窗口确定前台 App，按每秒费率（±0.167/±0.083 等）累加到 `_exactQuota`（Float），取整写回。追赶动画 0.6 秒完成大幅变化。
-- **旧版分钟模式（备选）**：保留原 60 秒 tick + 心跳双线程方案，可在设置中切换。
+- **秒级精确结算**：`QuotaService` 每秒执行，检测优先走 `ForegroundMonitorService`（事件驱动），备选走 `UsageStatsManager` 5 秒窗口确认前台 App。按每秒费率（±0.167/±0.083 等）累加到 `_exactQuota`（Float），取整写回。追赶动画 0.6 秒完成大幅变化。
 - 被系统杀死后回溯恢复**仅恢复不消耗**（因无法知道被杀期间用户行为），加载 `last_tick_time` 模拟恢复至多到 100
 
 ## Testing Decisions
@@ -179,27 +178,28 @@ QuotaEngineTest
 - 仪表盘 + 调试模式 + 连续平滑动画
 - 已知问题：检测灵敏度低，停留时长无法精确计算
 
-### v0.2.x — 秒级实时额度（当前阶段）
+### v0.2.x — AccessibilityService 实时检测（当前阶段）
 > 当前版本: v0.2.0
 
 | 功能 | 说明 | 状态 |
 |:-----|:-----|:----:|
-| 秒级实时额度 | 1 秒 tick + 10s 检测窗口 + Float 累积，每秒平滑变化 | ✅ 已完成 |
-| 旧版分钟模式备选 | 设置中可切回 60 秒 tick 方案 | ✅ 已完成 |
-| 追赶动画加速 | chaseSpeed=166.67，0.6 秒完成大幅变化 | ✅ 已完成 |
-| `QuotaCircleView` | 仪表盘使用悬浮球同款环形进度条 | ✅ 已完成 |
-| 检测窗口缩短 | UsageStatsManager 查 2 分钟 → 10 秒 | ✅ 已完成 |
+| `ForegroundMonitorService` (AccessibilityService) | 实时监听前台切换，事件驱动 | ✅ 已完成 |
+| 5 秒轮询备选 | UsageStatsManager 5s 窗口，无障碍未开时自动降级 | ✅ 已完成 |
+| 即时蒙层响应 | 切回短视频且额度 0 → 蒙层瞬间出现 | ✅ 已完成 |
+| 权限引导更新 | 新增无障碍权限引导步骤（第零步） | ✅ 已完成 |
+| 通知栏模式标识 | 显示"(实时)"或"(轮询)"模式 | ✅ 已完成 |
+| 旧版分钟模式移除 | 删除 legacyMode | ✅ 已完成 |
+| B 站 Activity 检测 | 利用 AccessibilityService 获取 Activity 名，区分短视频/长视频 | ⬜ 待实现 |
 
-### v0.3.x — AccessibilityService 事件驱动 + B 站检测
+### v0.3.x — 精确度与体验优化
 > 下一阶段
 
 | 功能 | 说明 | 优先级 |
 |:-----|:-----|:------:|
-| `ForegroundMonitorService` (AccessibilityService) | 实时监听前台切换，替代轮询 | P0 |
 | B 站 Activity 检测 | 利用 AccessibilityService 获取 Activity 名，区分短视频/长视频 | P0 |
-| 即时蒙层响应 | 切回短视频且额度 0 → 蒙层瞬间出现 | P0 |
-| 权限引导更新 | 新增无障碍权限引导步骤 | P0 |
 | 通知栏快捷操作 | 点击通知打开仪表盘 / 暂停服务 | P1 |
+| `QuotaCircleView` 仪表盘优化 | 接入真实数据 | P1 |
+| 单元测试覆盖 | QuotaEngine / AppDetector / ForegroundMonitorService | P1 |
 
 ### v1.0 — 可发布版本
 

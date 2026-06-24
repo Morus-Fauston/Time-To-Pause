@@ -18,17 +18,19 @@
 净速率：白天 -5 点/分钟，夜间 -13 点/分钟。即看 1 分钟约需休息 2 分钟（白天）或 5 分钟（夜间）回本。
 
 ### 检测范围
-- **精准命中**：抖音、快手等纯短视频 App（包名白名单）— UsageStatsManager 10 秒窗口，每秒轮询
+- **精准命中**：抖音、快手等纯短视频 App（包名白名单）
+- **检测方式**：
+  - **主方案**：`ForegroundMonitorService`（AccessibilityService）事件驱动，实时获取前台包名
+  - **备选**：`UsageStatsManager` 5 秒窗口轮询，无障碍未连接时自动降级
 - **B 站检测策略（保守）**：
   - v0.2.0 纯包名检测（不区分 B 站内部 Activity，全按短视频计）
-  - v0.3+ 计划通过 `AccessibilityService` 获取 Activity 名，区分短视频/长视频
+  - 后续计划通过 `AccessibilityService` 获取 Activity 名，区分短视频/长视频
 - **不检测**：微信视频号、浏览器网页版短视频等非主流入口——未来可扩展
 
 ### 后台计时架构
-- **秒级实时模式（默认）**：`QuotaService` 内 `Handler.postDelayed(1s)` 的 `secondRunnable`——每秒执行：检测前台 App（UsageStatsManager 查 10 秒窗口）→ 按每秒费率（如 -10/60 ≈ -0.167）累加到 `_exactQuota`（Float）→ 取整持久化 → 驱动 UI 更新
-- **旧版分钟模式（备选）**：保留原 60 秒 tick + 心跳双线程方案，可在设置中切换
+- **秒级实时模式**：`QuotaService` 内 `Handler.postDelayed(1s)` 的 `secondRunnable`——每秒执行：检测前台 App（优先走 `ForegroundMonitorService` 事件驱动，备选走 `UsageStatsManager` 5 秒窗口）→ 按每秒费率（如 -10/60 ≈ -0.167）累加到 `_exactQuota`（Float）→ 取整持久化 → 驱动 UI 更新
 - **追赶动画**：`FloatBallView` 以 166.67 点/秒速度追赶目标值，100 点变化约 0.6 秒完成
-- **未来升级**：v0.3+ 计划升级到 `AccessibilityService` 事件驱动，实现真实时 + Activity 名称检测
+- **旧版分钟模式**：v0.2.0 起已移除（不再支持 60 秒 tick 和 legacyMode）
 
 ### 视觉干预蒙层
 - **方案**：`WindowManager` 全屏悬浮半透明覆盖层（非系统级颜色反转）
@@ -63,7 +65,7 @@
 ### 首次启动流
 1. **欢迎页**：展示 ⏸️ 图标 + "是时候，停一下了" + 模拟进度条动效 + 三行功能介绍
 2. **"开始使用"按钮** → 进入阶梯式权限引导
-3. **权限引导**：`PACKAGE_USAGE_STATS`（使用情况访问）→ `SYSTEM_ALERT_WINDOW`（悬浮窗）→ 电池优化（推荐不强制）
+3. **权限引导**：无障碍服务（推荐）→ `PACKAGE_USAGE_STATS`（使用情况访问，轮询备选依赖）→ `SYSTEM_ALERT_WINDOW`（悬浮窗）→ 电池优化（推荐不强制）
 4. **开机自启选项**：默认关闭，用户可选开启
 5. **完成设置** → 启动 `ForegroundService`，进入正常运行
 
@@ -76,8 +78,8 @@
 - **方案**：`SharedPreferences`
 - **存储内容**：
   - `quota: Int` — 当前短视频额度（0-100）
-  - `grace_remaining_secs: Long` — 宽限剩余秒数
   - `grace_end_timestamp: Long` — 宽限结束时间戳（App 被杀后恢复用）
+  - `last_tick_time: Long` — 最后 tick 时间戳（回溯恢复用）
   - `last_tick_time: Long` — 上次额度更新的时间戳
 - **选型理由**：数据量极小（4 个 key-value）、无需协程/Flow、减少依赖
 

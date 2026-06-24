@@ -42,13 +42,6 @@ class QuotaStore(context: Context) {
         set(value) = prefs.edit().putLong(Constants.KEY_LAST_TICK, value).apply()
 
     /**
-     * 是否启用旧版分钟级模式
-     */
-    var legacyMode: Boolean
-        get() = prefs.getBoolean(Constants.KEY_LEGACY_MODE, false)
-        set(value) = prefs.edit().putBoolean(Constants.KEY_LEGACY_MODE, value).apply()
-
-    /**
      * 是否在宽限期内
      */
     fun isInGracePeriod(): Boolean {

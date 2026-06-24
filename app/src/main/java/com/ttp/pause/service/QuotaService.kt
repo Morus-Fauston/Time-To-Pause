@@ -14,21 +14,24 @@ import com.ttp.pause.Constants
 import com.ttp.pause.R
 import com.ttp.pause.data.QuotaStore
 import com.ttp.pause.detector.AppDetector
+import com.ttp.pause.detector.ForegroundMonitorService
 import com.ttp.pause.ui.OverlayManager
 
 /**
  * 后台配额服务
  *
  * 核心职责：
- * 1. 每秒 tick：检测前台 App → 秒级/分钟级（按模式）→ 持久化
+ * 1. 每秒 tick：判定前台 App（AccessibilityService 事件驱动优先，轮询备选）→ Float 累积 → 持久化
  * 2. 管理宽限计时
  * 3. 通知栏显示当前状态
  * 4. 被杀重启后触发回溯恢复
  * 5. 通过 OverlayManager 控制悬浮球和宽限对话框
  *
- * 运行模式（设置中切换）：
- * - 秒级模式（默认）：每秒按费率变化，精确平滑
- * - 旧版分钟模式：每 60 秒 tick 一次，按分钟费率跳变
+ * 检测优先级：
+ *   AccessibilityService 已连接 → 使用事件驱动的 lastForegroundPackage
+ *   AccessibilityService 未连接 → 降级到 UsageStatsManager 5 秒窗口轮询
+ *
+ * 旧版 60 秒分钟模式已移除（v0.2.0 起仅支持秒级精确模式）。
  */
 class QuotaService : Service() {
 
@@ -46,19 +49,15 @@ class QuotaService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
 
-    // ---- 秒级精确额度（仅秒级模式使用） ----
+    // ---- Float 精度累积 ----
     private var _exactQuota = Constants.QUOTA_MAX.toFloat()
 
-    // ---- 通用每秒循环：取代旧的 tickRunnable + heartbeatRunnable ----
+    // ---- 每秒循环 ----
     private val secondRunnable = object : Runnable {
-        /** 旧版模式的 60 秒计数器 */
-        private var legacyCounter = 0
-
         override fun run() {
             val now = System.currentTimeMillis()
 
             if (quotaStore.isInGracePeriod()) {
-                // 宽限冻结：不计算额度，仅更新通知 + UI
                 quotaStore.lastTickTime = now
                 updateNotification()
                 overlayManager.update(
@@ -70,54 +69,39 @@ class QuotaService : Service() {
                 return
             }
 
-            if (quotaStore.legacyMode) {
-                // ======== 旧版分钟级模式 ========
-                legacyCounter++
-                if (legacyCounter >= 60) {
-                    legacyCounter = 0
-                    val isWatching = appDetector.isWatchingShortVideo()
-                    val delta = engine.calculateDelta(isWatching, engine.isDayTime(now))
-                    val newQuota = (quotaStore.quota + delta)
-                        .coerceIn(Constants.QUOTA_MIN, Constants.QUOTA_MAX)
-                    if (newQuota != quotaStore.quota) {
-                        quotaStore.quota = newQuota
-                    }
-                    quotaStore.lastTickTime = now
-                }
-                updateNotification()
-                overlayManager.update(
-                    quota = quotaStore.quota,
-                    isWatching = appDetector.isWatchingShortVideo(),
-                    inGracePeriod = false
-                )
+            // === 前台 App 判定 ===
+            // 优先级 1：AccessibilityService 事件驱动
+            // 优先级 2：UsageStatsManager 5 秒窗口轮询兜底
+            val isWatching: Boolean
+            if (ForegroundMonitorService.isConnected) {
+                val pkg = ForegroundMonitorService.lastForegroundPackage
+                isWatching = pkg != null && (appDetector.isShortVideoApp(pkg) || appDetector.isBilibili(pkg))
             } else {
-                // ======== 秒级精确模式（默认） ========
-                // 检查外部是否有人直接改了 quota（如 DebugActivity）
-                if (kotlin.math.abs(_exactQuota - quotaStore.quota.toFloat()) > 0.5f) {
-                    _exactQuota = quotaStore.quota.toFloat()
-                }
-
-                val isWatching = appDetector.isWatchingShortVideo()
-                val deltaPerSec = engine.calculateDeltaPerSecond(
-                    isWatching, engine.isDayTime(now)
-                )
-                _exactQuota = (_exactQuota + deltaPerSec)
-                    .coerceIn(Constants.QUOTA_MIN.toFloat(), Constants.QUOTA_MAX.toFloat())
-
-                val rounded = _exactQuota.toInt()
-                if (rounded != quotaStore.quota) {
-                    quotaStore.quota = rounded
-                }
-                quotaStore.lastTickTime = now
-                updateNotification()
-
-                // 在看视频 + 额度为 0 → 蒙层
-                overlayManager.update(
-                    quota = rounded,
-                    isWatching = isWatching,
-                    inGracePeriod = false
-                )
+                isWatching = appDetector.isWatchingShortVideo()
             }
+
+            // === 同步外部修改 ===
+            if (kotlin.math.abs(_exactQuota - quotaStore.quota.toFloat()) > 0.5f) {
+                _exactQuota = quotaStore.quota.toFloat()
+            }
+
+            // === Float 累积 ===
+            val deltaPerSec = engine.calculateDeltaPerSecond(isWatching, engine.isDayTime(now))
+            _exactQuota = (_exactQuota + deltaPerSec)
+                .coerceIn(Constants.QUOTA_MIN.toFloat(), Constants.QUOTA_MAX.toFloat())
+
+            val rounded = _exactQuota.toInt()
+            if (rounded != quotaStore.quota) {
+                quotaStore.quota = rounded
+            }
+            quotaStore.lastTickTime = now
+            updateNotification()
+
+            overlayManager.update(
+                quota = rounded,
+                isWatching = isWatching,
+                inGracePeriod = false
+            )
 
             handler.postDelayed(this, 1000L)
         }
@@ -132,7 +116,6 @@ class QuotaService : Service() {
 
         _exactQuota = quotaStore.quota.toFloat()
 
-        // 初始化悬浮窗管理器
         overlayManager = OverlayManager(this)
         overlayManager.onGraceGranted = {
             quotaStore.startGrace()
@@ -144,10 +127,7 @@ class QuotaService : Service() {
         createNotificationChannel()
         startForeground(Constants.NOTIFICATION_ID, buildNotification())
 
-        // 回溯恢复：处理 Service 被杀期间的时间
         catchUpRecovery()
-
-        // 启动每秒循环
         handler.post(secondRunnable)
     }
 
@@ -165,19 +145,30 @@ class QuotaService : Service() {
         super.onDestroy()
     }
 
-    /** 外部（如 DebugActivity）修改额度后调用，同步浮点精度 */
+    // =========================================================
+    // AccessibilityService 回调
+    // =========================================================
+
+    /** 前台 App 变化时由 AccessibilityService 即时调用 */
+    fun onForegroundChanged(packageName: String?) {
+        if (!quotaStore.isInGracePeriod() && quotaStore.quota <= Constants.QUOTA_MIN) {
+            val watching = packageName != null &&
+                (appDetector.isShortVideoApp(packageName) || appDetector.isBilibili(packageName))
+            if (watching) {
+                overlayManager.update(quota = 0, isWatching = true, inGracePeriod = false)
+            }
+        }
+    }
+
+    /** 外部修改额度后调用（如 DebugActivity） */
     fun syncExactQuota() {
         _exactQuota = quotaStore.quota.toFloat()
     }
 
-    /** 切换模式时调用，刷新内部状态 */
-    fun onModeChanged() {
-        _exactQuota = quotaStore.quota.toFloat()
-    }
+    // =========================================================
+    // 回溯恢复
+    // =========================================================
 
-    /**
-     * 回溯恢复：委托 QuotaEngine 计算恢复量
-     */
     private fun catchUpRecovery() {
         val now = System.currentTimeMillis()
         val recovered = engine.catchUpRecovery(quotaStore.lastTickTime, now)
@@ -189,7 +180,9 @@ class QuotaService : Service() {
         quotaStore.lastTickTime = now
     }
 
-    // ---- Notification ----
+    // =========================================================
+    // Notification
+    // =========================================================
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -208,7 +201,8 @@ class QuotaService : Service() {
         val quotaText = if (quotaStore.isInGracePeriod()) {
             "宽限中 ${engine.graceRemainingSeconds(quotaStore.graceEndTimestamp)}秒"
         } else {
-            "额度 ${quotaStore.quota}"
+            val mode = if (ForegroundMonitorService.isConnected) "实时" else "轮询"
+            "额度 ${quotaStore.quota} ($mode)"
         }
 
         return NotificationCompat.Builder(this, Constants.NOTIFICATION_CHANNEL_ID)
@@ -224,9 +218,6 @@ class QuotaService : Service() {
         notificationManager.notify(Constants.NOTIFICATION_ID, buildNotification())
     }
 
-    /**
-     * 供 Activity 恢复时调用：强制重新评估并显示蒙层
-     */
     fun checkAndApplyOverlay() {
         if (quotaStore.isInGracePeriod()) {
             overlayManager.update(
