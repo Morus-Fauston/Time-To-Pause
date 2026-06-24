@@ -70,8 +70,17 @@ class ForegroundMonitorService : AccessibilityService() {
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString()
             val activity = event.className?.toString()
-            lastForegroundPackage = pkg
-            lastForegroundActivity = activity
+
+            // 注意: TYPE_WINDOW_STATE_CHANGED 也会为系统事件触发
+            // (通知栏、锁屏、最近任务、键盘、系统弹窗等),
+            // 此时 packageName 通常为 null.
+            //
+            // 绝不能把 lastForegroundPackage 覆盖为 null, 否则检测会永久丢失.
+            // 系统事件更新 lastEventTimestamp 保持 watchdog 存活即可.
+            if (pkg != null) {
+                lastForegroundPackage = pkg
+                lastForegroundActivity = activity
+            }
             lastEventTimestamp = System.currentTimeMillis()
             if (!hasReceivedFirstEvent) {
                 hasReceivedFirstEvent = true
