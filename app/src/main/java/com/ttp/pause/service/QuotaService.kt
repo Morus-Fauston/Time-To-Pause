@@ -53,7 +53,13 @@ class QuotaService : Service() {
     // 每秒心跳 tick：推动悬浮球连续动画（即使额度未变化）
     private val heartbeatRunnable = object : Runnable {
         override fun run() {
-            if (!quotaStore.isInGracePeriod()) {
+            if (quotaStore.isInGracePeriod()) {
+                overlayManager.update(
+                    quota = quotaStore.quota,
+                    isWatching = false,
+                    inGracePeriod = true
+                )
+            } else {
                 overlayManager.update(
                     quota = quotaStore.quota,
                     isWatching = appDetector.isWatchingShortVideo(),
@@ -131,17 +137,11 @@ class QuotaService : Service() {
 
         // 1. 是否在宽限期？
         if (quotaStore.isInGracePeriod()) {
-            // 宽限期间：暂停消耗，按不观看恢复
-            val delta = engine.calculateDelta(isWatching = false, engine.isDayTime(now))
-            val newQuota = (quotaStore.quota + delta).coerceIn(Constants.QUOTA_MIN, Constants.QUOTA_MAX)
-            if (newQuota != quotaStore.quota) {
-                quotaStore.quota = newQuota
-            }
+            // 宽限期间：额度完全冻结——不消耗也不恢复，仅更新通知栏倒计时
             quotaStore.lastTickTime = now
             updateNotification()
-            // 宽限期间显示悬浮球，隐藏蒙层
             overlayManager.update(
-                quota = newQuota,
+                quota = quotaStore.quota,
                 isWatching = false,
                 inGracePeriod = true
             )
