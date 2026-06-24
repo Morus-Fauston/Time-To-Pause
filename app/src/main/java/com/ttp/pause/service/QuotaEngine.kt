@@ -56,36 +56,33 @@ class QuotaEngine {
      * 计算被杀期间应恢复的额度
      *
      * 假设被杀期间用户"未在看"，仅按恢复速率计算。
-     * 最多回溯 24 小时（1440 分钟），超过的部分忽略。
+     * 最多回溯 24 小时，超过的部分忽略。
      *
      * @param lastTickTime 最后记录的 tick 时间戳（毫秒）
      * @param now 当前时间戳（毫秒）
-     * @param tickIntervalMs 每次 tick 的间隔（默认 60 秒）
-     * @param maxMinutes 最多回溯分钟数（默认 1440 = 24 小时）
+     * @param maxSeconds 最多回溯秒数（默认 86400 = 24 小时）
      * @return 应恢复的额度值（未 clamp，调用方处理后 clamp 到 0-100）
      */
     fun catchUpRecovery(
         lastTickTime: Long,
         now: Long,
-        tickIntervalMs: Long = Constants.TICK_INTERVAL_MS,
-        maxMinutes: Int = 1440
+        maxSeconds: Int = 86400
     ): Int {
-        val elapsedMinutes = ((now - lastTickTime) / tickIntervalMs).toInt()
-            .coerceIn(0, maxMinutes)
-        if (elapsedMinutes <= 0) return 0
+        val elapsedSeconds = ((now - lastTickTime) / 1000L).toInt()
+            .coerceIn(0, maxSeconds)
+        if (elapsedSeconds <= 0) return 0
 
-        var recovered = 0
+        val dayRecoveryPerSec = Constants.RECOVER_DAY / 60f   // ~0.083 点/秒
+        val nightRecoveryPerSec = Constants.RECOVER_NIGHT / 60f // = 0.05 点/秒
+
+        var recovered = 0f
         var currentTime = lastTickTime
 
-        for (i in 0 until elapsedMinutes) {
-            currentTime += tickIntervalMs
-            recovered += if (isDayTime(currentTime)) {
-                Constants.RECOVER_DAY
-            } else {
-                Constants.RECOVER_NIGHT
-            }
+        for (i in 0 until elapsedSeconds) {
+            currentTime += 1000L
+            recovered += if (isDayTime(currentTime)) dayRecoveryPerSec else nightRecoveryPerSec
         }
-        return recovered
+        return recovered.toInt()
     }
 
     // =========================================================

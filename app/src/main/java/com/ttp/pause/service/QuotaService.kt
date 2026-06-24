@@ -70,19 +70,20 @@ class QuotaService : Service() {
             }
 
             // === 前台 App 判定 ===
-            // 优先级 1：AccessibilityService 事件驱动
+            // 优先级 1：AccessibilityService 事件驱动（含 watchdog 存活检测）
             // 优先级 2：UsageStatsManager 5 秒窗口轮询兜底
             val isWatching: Boolean
-            if (ForegroundMonitorService.isConnected) {
+            if (ForegroundMonitorService.isEffectivelyConnected) {
                 val pkg = ForegroundMonitorService.lastForegroundPackage
-                isWatching = pkg != null && (appDetector.isShortVideoApp(pkg) || appDetector.isBilibili(pkg))
+                val activity = ForegroundMonitorService.lastForegroundActivity
+                isWatching = if (pkg == Constants.BILIBILI_PACKAGE) {
+                    // B 站需要 Activity 名区分短视频/长视频
+                    activity != null && appDetector.isBilibiliShortVideoActivity(activity)
+                } else {
+                    pkg != null && appDetector.isShortVideoApp(pkg)
+                }
             } else {
                 isWatching = appDetector.isWatchingShortVideo()
-            }
-
-            // === 同步外部修改 ===
-            if (kotlin.math.abs(_exactQuota - quotaStore.quota.toFloat()) > 0.5f) {
-                _exactQuota = quotaStore.quota.toFloat()
             }
 
             // === Float 累积 ===
@@ -93,6 +94,11 @@ class QuotaService : Service() {
             val rounded = _exactQuota.toInt()
             if (rounded != quotaStore.quota) {
                 quotaStore.quota = rounded
+            }
+            // 安全网：检测外部修改（如 DebugActivity 设置了额度但忘了调 syncExactQuota）
+            // > 5.0 的差值不可能由正常 Float 累积产生，必定是外部修改
+            if (kotlin.math.abs(_exactQuota - quotaStore.quota.toFloat()) > 5.0f) {
+                _exactQuota = quotaStore.quota.toFloat()
             }
             quotaStore.lastTickTime = now
             updateNotification()
@@ -150,13 +156,20 @@ class QuotaService : Service() {
     // =========================================================
 
     /** 前台 App 变化时由 AccessibilityService 即时调用 */
-    fun onForegroundChanged(packageName: String?) {
-        if (!quotaStore.isInGracePeriod() && quotaStore.quota <= Constants.QUOTA_MIN) {
-            val watching = packageName != null &&
-                (appDetector.isShortVideoApp(packageName) || appDetector.isBilibili(packageName))
-            if (watching) {
-                overlayManager.update(quota = 0, isWatching = true, inGracePeriod = false)
-            }
+    fun onForegroundChanged(packageName: String?, activityName: String? = null) {
+        // 不修改 _exactQuota（由 tick 负责），只做蒙层即时响应
+        if (quotaStore.isInGracePeriod()) return
+
+        // B 站需 Activity 名区分短视频/长视频，其余按包名检测
+        val watching = if (packageName == Constants.BILIBILI_PACKAGE) {
+            activityName != null && appDetector.isBilibiliShortVideoActivity(activityName)
+        } else {
+            packageName != null && appDetector.isShortVideoApp(packageName)
+        }
+
+        // 额度归零 + 在看 → 立即显示蒙层（不等 tick，<1s 响应）
+        if (watching && quotaStore.quota <= Constants.QUOTA_MIN) {
+            overlayManager.update(quota = 0, isWatching = true, inGracePeriod = false)
         }
     }
 
@@ -201,7 +214,7 @@ class QuotaService : Service() {
         val quotaText = if (quotaStore.isInGracePeriod()) {
             "宽限中 ${engine.graceRemainingSeconds(quotaStore.graceEndTimestamp)}秒"
         } else {
-            val mode = if (ForegroundMonitorService.isConnected) "实时" else "轮询"
+            val mode = if (ForegroundMonitorService.isEffectivelyConnected) "实时" else "轮询"
             "额度 ${quotaStore.quota} ($mode)"
         }
 
