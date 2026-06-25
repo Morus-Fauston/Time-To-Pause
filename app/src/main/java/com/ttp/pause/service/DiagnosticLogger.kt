@@ -72,6 +72,7 @@ object DiagnosticLogger {
         val overlayShown: Boolean,
         val connectionMode: String,
         val a11yConnected: Boolean,
+        val a11yBindConnected: Boolean,
         val lastPkg: String?,
         val lastActivity: String?
     )
@@ -107,6 +108,7 @@ object DiagnosticLogger {
         overlayShown: Boolean,
         connectionMode: String,
         a11yConnected: Boolean,
+        a11yBindConnected: Boolean,
         lastPkg: String?,
         lastActivity: String?
     ) {
@@ -125,6 +127,7 @@ object DiagnosticLogger {
             overlayShown = overlayShown,
             connectionMode = connectionMode,
             a11yConnected = a11yConnected,
+            a11yBindConnected = a11yBindConnected,
             lastPkg = lastPkg,
             lastActivity = lastActivity
         )
@@ -219,6 +222,7 @@ object DiagnosticLogger {
         append("| Grace ")
         append("| Ovr ")
         append("| Mode ")
+        append("| Bind ")
         append("| A11y ")
         append("| LastPkg")
     }
@@ -234,6 +238,7 @@ object DiagnosticLogger {
         append("+---")
         append("+-------")
         append("+-----")
+        append("+------")
         append("+------")
         append("+------")
         append("+--------------------------")
@@ -257,6 +262,7 @@ object DiagnosticLogger {
             append(" | ${if (inGracePeriod) "GRACE" else "    -"}")
             append(" | ${if (overlayShown) "  OV" else "   -"}")
             append(" | ${connectionMode.padStart(4)}")
+            append(" | ${if (a11yBindConnected) "YES" else "NO "}")
             append(" | ${if (a11yConnected) "CONN" else "DIS "}")
             append(" | ${lastPkg ?: "-"}")
         }
@@ -279,6 +285,7 @@ object DiagnosticLogger {
             append("| ${if (inGracePeriod) " grace " else "   -   "} ")
             append("| ${if (overlayShown) " yes " else "  -  "} ")
             append("| ${connectionMode.padEnd(4)} ")
+            append("| ${if (a11yBindConnected) "yes" else " no"} ")
             append("| ${if (a11yConnected) "yes" else " no"} ")
             append("| ${lastPkg ?: "-"}")
         }

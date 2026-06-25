@@ -51,7 +51,7 @@ object Constants {
      *
      * N=3：切换延迟 ~3s，振荡概率 0.3³=2.7%
      */
-    const val POLL_CONFIRMATION_THRESHOLD = 3
+    const val POLL_CONFIRMATION_THRESHOLD = 5
 
     // SharedPreferences keys
     const val KEY_QUOTA = "quota"
@@ -66,6 +66,15 @@ object Constants {
 
     /** 环形缓冲区大小：3600 = 1 小时（1 tick/s） */
     const val DIAG_RING_BUFFER_SIZE = 3600
+
+    /**
+     * A11y 有效连接 watchdog 超时（毫秒）
+     *
+     * 如果在此时间内未收到任何 A11y 事件，则认为 A11y 已断开。
+     * 60s 足以覆盖 MIUI 全屏视频播放期间不发送事件的情况，
+     * 同时能在 A11y 真正断开后及时降级到轮询。
+     */
+    const val A11Y_WATCHDOG_MS = 60_000L
 
     /** SharedPreferences key：调试模式开关 */
     const val KEY_DIAG_ENABLED = "diag_enabled"
@@ -142,6 +151,13 @@ object Constants {
         "com.android.printspooler",                     // 打印服务弹窗
         "com.android.phone",                            // 来电/通话弹窗
         "com.android.server.telecom",                   // 通话管理
+        // ---- MIUI 特有系统浮层 ----
+        "com.miui.misound",                             // MIUI 音量面板
+        "miui.systemui.plugin",                         // MIUI 系统界面插件
+        "com.miui.personalassistant",                   // MIUI 个人助理
+        "com.miui.android.fashiongallery",              // MIUI 杂志锁屏
+        "com.miui.securitycenter",                      // MIUI 安全中心弹窗
+        "com.miui.voiceassist",                         // MIUI 语音助手
     )
 
     /**
@@ -177,6 +193,7 @@ object Constants {
         "com.microsoft.emmx",                           // Edge
         "com.uc.browser",                               // UC
         // ---- 系统 ----
+        "com.android.quicksearchbox",                  // 系统全局搜索
         "com.android.settings",                         // 系统设置
         "com.android.dialer",                           // 电话
         "com.android.contacts",                         // 通讯录
@@ -184,5 +201,5 @@ object Constants {
     )
 
     /** APK 版本名（用于诊断日志导出头） */
-    const val VERSION_NAME = "0.2.4"
+    const val VERSION_NAME = "0.2.4.revised.5"
 }

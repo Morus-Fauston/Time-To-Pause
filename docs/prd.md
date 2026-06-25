@@ -1,6 +1,6 @@
 # PRD: 「停一下吧 (Time To Pause)」
 
-> 版本: 1.5 | 日期: 2026-06-25 | 状态: Draft
+> 版本: 1.7 | 日期: 2026-06-25 | 状态: Draft
 
 ---
 
@@ -22,7 +22,7 @@
 - **宽限**：答题换 5 分钟。宽限期间**额度完全冻结**——不消耗也不恢复，仅暂停干预。
 - **悬浮球**：默认始终显示（可在设置中关闭：仅在看短视频时显示）。宽限期间切换为倒计时模式（剩余秒数 + 外圈进度环递减）。
 - **蒙层**：非对抗性视觉干预。可选两种方向——**温和干预**（渐变呼吸动画，强调自我觉察）或**视觉剥夺**（漂白+背景模糊+动态噪点，各三档强度）。不拦截下层触控。
-- **检测（v0.2.3+）**：**轮询为主，A11y 加速**。UsageStatsManager 每秒查询是唯一持续真相来源（N=3 确认）。AccessibilityService 仅做瞬态状态跳转。系统弹窗和未知 App 事件完全忽略。方向优先——宁可多消耗不可错误恢复。
+- **检测（v0.2.4.revised.3+）**：**A11y 优先，轮询兜底**。当 AccessibilityService 有效连接且 LastPkg 为短视频时，跳过轮询直接判定"在看"。轮询仅在 A11y 断开或包名非短视频时作为兜底。MIUI 设备上三个特有问题的修复详见 ADR-0005。方向优先——宁可多消耗不可错误恢复。
 
 ## User Stories
 
@@ -83,11 +83,33 @@
 
 - **后台 tick 采用 ForegroundService + Handler，不用 WorkManager**。WorkManager 最小间隔 15 分钟，不满足更新需求。Service 内 Handler 是进程内轻量定时器。（参见 ADR-0001）
 - **全量使用 XML + View 体系，不用 Jetpack Compose**。VS Code 对 Compose 无实时预览；悬浮球和蒙层需要 `WindowManager` 直接操作 View 层级，Compose 在此场景下不受支持。（参见 ADR-0002）
-- **检测采用白名单轮询架构（v0.2.3+）**：轮询（UsageStatsManager）是唯一持续真相来源，A11y 事件仅做瞬态跳转。系统弹窗和未知 App 事件完全忽略。方向优先——宁可多消耗不可错误恢复。连续 N=3 确认消除 30% 丢包振荡。（参见 ADR-0005，替代 ADR-0003）
+- **检测采用 A11y 优先 + 轮询兜底架构（v0.2.4.revised.3+）**：A11y 有效连接且 LastPkg 为短视频时跳过轮询。轮询（UsageStatsManager, N=5 确认）仅在 A11y 断开或 LastPkg 非短视频时启用。系统弹窗和未知 App 事件完全忽略。方向优先——宁可多消耗不可错误恢复。MIUI 特有适配详见 ADR-0005 的 MIUI 兼容性备忘录。
 - **UI 技术栈**：XML + AppCompat + ConstraintLayout + WindowManager（悬浮球/蒙层）。
 - **检测与结算合一**：单个 `secondRunnable` 每秒同时做检测、计算、UI 更新。
 
-### 检测状态机（v0.2.3+）
+### 检测架构演进（v0.2.0.revised → v0.2.4.revised.5）
+
+v0.2.x 的核心工作是解决"一直在刷抖音但额度异常变化"的检测 bug。经历了 **4 个架构阶段、17 次迭代**，最终于 v0.2.4.revised.5 稳定。详见 CHANGELOG.md 的完整修复历程和老 ADR-0003 的完整演进史。
+
+| 阶段 | 版本范围 | 核心原则 | 结果 |
+|:----|:---------|:---------|:-----|
+| L1 | v0.2.0.revised.1~11 | A11y 主 + 轮询备选 + keepalive 时间戳 | 三源冲突，系统弹窗穷举不尽 |
+| L2 | v0.2.1 | 四状态机 + 纯逻辑重构 | 代码质量提升，根本矛盾未解 |
+| L3 | v0.2.2~revised.1 | A11y 快路径 + 轮询慢路径 + N=3 | 丢弃时间耦合，轮询误差仍存 |
+| L4 | v0.2.3~v0.2.4.revised.5 | A11y 优先 + 轮询兜底 + 补偿 | **稳定运行 ✅** |
+
+**最终架构**：
+```
+A11y 优先 + 轮询兜底 + 过度扣除补偿
+├── a11yKnowsWatching (A11y已绑定 + LastPkg=短视频 → 跳过轮询，信任 A11y)
+├── a11yKnowsNotWatching (A11y已绑定 + LastPkg=已知非短视频 → 跳过轮询 + 补偿)
+├── 轮询兜底 (N=5, 仅用于 A11y 断开或 LastPkg 非短视频/已知非短视频时)
+└── MIUI 三层适配 (exported=true / watchdog 60s / MIUI 白名单)
+```
+
+**已知待改进项**：键盘输入法中断修复、B 站 Activity 白名单远程更新、宽限时悬浮球倒计时模式。详见 CHANGELOG.md。
+
+### 检测状态机（v0.2.4.revised.5+）
 
 ```
                   ┌─────────────┐
@@ -189,7 +211,7 @@ QuotaEngineTest
 - 已知问题：检测灵敏度低，停留时长无法精确计算
 
 ### v0.2.x — AccessibilityService 实时检测 + Bug 修复（当前阶段）
-> 当前版本: v0.2.0.revised.3
+> 当前版本: v0.2.4.revised.5
 
 | 功能 | 说明 | 状态 |
 |:-----|:-----|:----:|
@@ -199,11 +221,19 @@ QuotaEngineTest
 | 权限引导更新 | 新增无障碍权限引导步骤（第零步） | ✅ 已完成 |
 | 通知栏模式标识 | 显示"(实时)"或"(轮询)"模式 | ✅ 已完成 |
 | B 站 Activity 检测 | 利用 AccessibilityService 获取 Activity 名，区分短视频/长视频 | ✅ 已完成 |
+| A11y 绑定修复（MIUI） | `AndroidManifest.xml` exported=false→true，修复系统跨进程绑定 | ✅ v0.2.4.revised |
+| A11y watchdog 60s | 全屏视频停发事件时 60s 超时（原 10s 太激进） | ✅ v0.2.4.revised.2 |
+| A11y 优先于轮询 | `a11yKnowsWatching`：A11y 有效+LastPkg=短视频时跳过轮询 | ✅ v0.2.4.revised.3→4 |
+| MIUI 系统包名白名单 | `com.miui.misound`, `miui.systemui.plugin` 等加入 `SYSTEM_OVERLAY_PACKAGES` | ✅ v0.2.4.revised.2 |
+| 诊断日志系统 | 环形缓冲区 + DebugActivity 导出 txt | ✅ v0.2.4 |
+| 诊断日志增强（Bind 列） | 新增 `a11yBindConnected` 区分未绑定/已绑无事件 | ✅ v0.2.4.revised |
+| 退出过度扣除补偿 | `a11yKnowsNotWatching` + `QuotaAccumulator.compensate()` | ✅ v0.2.4.revised.5 |
+| 检测架构最终稳定 | 4 阶段 17 次迭代，详见 CHANGELOG.md 完整修复历程 | ✅ v0.2.4.revised.5 |
 | 键盘输入法中断修复 | 输入法包名不覆盖 `lastForegroundPackage`（方案 A） | ⬜ 待实现 |
 | 切出短视频蒙层残留修复 | `OverlayManager.update()` 缺少"不在看→隐藏"分支 | ⬜ 待实现 |
 | 宽限时悬浮球倒计时模式 | 宽限期间悬浮球显示剩余秒数 + 外圈进度环递减 | ⬜ 待实现 |
 | 悬浮球始终显示可选 | 设置中增加"仅在看短视频时显示悬浮球"开关 | ⬜ 待实现 |
-| 关闭蒙层后 30 秒防打扰 + 循环干预 | 关闭后 30 秒内不再弹出，超时后继续阻遏 | ⬜ 待实现 |
+| 关闭蒙层后 30 秒防打扰 | 关闭后 30 秒内不再弹出，超时后继续阻遏 | ⬜ 待实现 |
 
 ### v0.3.x — 体验优化与 UI 重构
 

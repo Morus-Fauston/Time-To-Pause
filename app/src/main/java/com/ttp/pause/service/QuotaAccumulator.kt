@@ -74,4 +74,19 @@ class QuotaAccumulator(initialQuota: Int) {
      * 获取内部浮点值（用于诊断/测试）。
      */
     fun exactQuota(): Float = _exactQuota
+
+    /**
+     * 补偿机制：回调 tick 期间过度扣除的额度。
+     *
+     * 当 A11y 已确认用户离开但状态机尚未退出时，
+     * [ForegroundDetector] 记录这些过度扣除的 tick，
+     * 在状态切换到 NOT_WATCHING 后调用此方法补偿。
+     *
+     * @param amount 要补偿的额度（正值 → 增加 _exactQuota）
+     */
+    fun compensate(amount: Float) {
+        if (amount <= 0f) return
+        _exactQuota = (_exactQuota + amount)
+            .coerceIn(Constants.QUOTA_MIN.toFloat(), Constants.QUOTA_MAX.toFloat())
+    }
 }

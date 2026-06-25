@@ -2,7 +2,7 @@
 
 ## Status
 
-**Superseded — 2026-06-25**。v0.2.3 起由 ADR-0005（白名单轮询架构）完全替代。ADR-0003 的历史保留供参考。
+**Superseded — 2026-06-25**。v0.2.3 起由 ADR-0005（白名单轮询架构）替代，但与 ADR-0005 经历了三个迭代层级的演进（见"演进后的反思"）。ADR-0003 的历史保留供参考。
 
 ## Context
 
@@ -117,10 +117,89 @@ AccessibilityService 在 Android 上是最可靠的前台检测手段。其主�
 ### 无障碍 + 前台双检测
 额外复杂度与收益不成正比，已排除。
 
-## Future Direction
+## 完整演进史（v0.2.0.revised → v0.2.4.revised.5）
 
-已知待改进项：
+从 v0.2.0.revised 到 v0.2.4.revised.5，经历了 **4 个架构阶段、17 次迭代**。
+
+### 阶段一：A11y 为主 + 轮询备选（v0.2.0.revised.1~11）
+
+三种检测信号源（A11y 包名 / keepalive 时间戳 / UsageStats 轮询）共存于 `QuotaService.secondRunnable`，无优先级，相互覆盖。
+
+**迭代链：**
+
+| 版本 | 症状 | 根因 | 修复 |
+|:----|:-----|:-----|:-----|
+| revised.1 | 消耗加速 6x | `_exactQuota` 每 tick 回写 Int | Float 累积，取整才持久化 |
+| revised.2 | 系统事件后检测丢失 | null-pkg 覆盖 `lastForegroundPackage` | null 不覆盖 |
+| revised.3 | 输入法弹出后检测丢失 | 输入法包名覆盖 | `INPUT_METHOD_PACKAGES` 白名单 |
+| revised.4 | 切出 App 蒙层残留 | `update()` 缺少 `!isWatching`→隐藏 | 增加隐藏分支 |
+| revised.5 | "一段消耗一段恢复"循环 | keepalive 被非短视频事件续期 | 只由短视频事件扩展 keepalive |
+| revised.6 | 轮询振荡 46 次/2 分钟 | A11y 连接时仍走轮询 | A11y 连接时移除轮询 |
+| revised.7 | 同上 | 系统事件保持 watchdog 不死→轮询永不触发 | LADDER 梯级，每个分支都轮询 |
+| revised.8 | `SYSTEM_OVERLAY_PACKAGES` 黑名单（2→14） | 黑名单穷举不完 | 转向 L2 |
+| revised.11 | NFC 弹窗触发 LEAVING | NFC 包名在黑名单外 | 转向 L2 |
+
+**失败原因**：三种信号源优先级相互冲突、黑名单在 ROM 碎片化面前不可扩展、keepalive 时间耦合。
+
+### 阶段二：四状态机 + 纯逻辑重构（v0.2.1）
+
+`ForegroundDetector` 四状态（WATCHING/GRACE/IDLE/DISCONNECTED）消除内存状态不一致。
+
+**结果**：代码质量大幅提升，但根本矛盾（信号源冲突）未解决。
+
+| 修复 | 症状 | 根因 |
+|:----|:-----|:-----|
+| v0.2.1 | 额度反复横跳 | GRACE 缺少轮询兜底 |
+| v0.2.1.revised | IDLE 永久卡死不变化 | IDLE 状态在 A11y 未连接时无轮询 |
+
+### 阶段三：A11y 快路径 + 轮询慢路径双层确认（v0.2.2 → v0.2.2.revised.1）
+
+丢弃 keepalive 时间耦合，引入三状态机（WATCHING/LEAVING/NOT_WATCHING）+ N=3 确认。
+
+| 修复 | 症状 | 根因 |
+|:----|:-----|:-----|
+| v0.2.2 | 30% 丢包振荡 | 单次轮询不可靠 |
+| v0.2.2.revised | WATCHING 无退出路径 | processWatching 不轮询 |
+| v0.2.2.revised.1 | NOT_WATCHING 锁死 | `_isConnected` 守卫 |
+
+### 阶段四：白名单轮询 + A11y 优先（v0.2.3 → v0.2.4.revised.5）
+
+**v0.2.3**：彻底转向"轮询唯一真理"架构，系统弹窗完全忽略。已知非短视频 App 白名单触发 LEAVING。
+
+**v0.2.4**：新增诊断日志系统，遥控调试成为可能。
+
+**v0.2.4.revised 系列**——由 3 份诊断日志驱动的 5 次修复：
+
+| 修复层 | 版本 | 诊断证据 | 根因 | 修复 |
+|:------|:----|:---------|:-----|:-----|
+| 1st | revised | 全篇 `Bind=no, A11y=no, LastPkg=-` | `exported=false`，系统无法跨进程绑定 A11y | `exported=true` |
+| 2nd | revised.2 | `Bind=yes, A11y=no` + `LastPkg=miui.misound` | watchdog 10s 过短 + MIUI 特有浮层未过滤 | watchdog 10s→60s；MIUI 白名单 |
+| 3rd | revised.3 | `Bind=yes, A11y=no, LastPkg=抖音` 但额度恢复 | `a11yKnowsWatching` 用 `isEffectivelyConnected` 过于严格 | 改为 `_isConnected` |
+| 4th | revised.4 | `Bind=yes, LastPkg=抖音`, watchdog 到期后仍退出 | `a11yKnowsWatching` 仍用 `isEffectivelyConnected` | 彻底改用 `_isConnected` |
+| 5th | revised.5 | 退出时多扣 14 秒 | LEAVING 中轮询延迟返回 true 覆盖 A11y | `a11yKnowsNotWatching` + 补偿 |
+
+### 最终架构
+
+```
+A11y 优先 + 轮询兜底
+├── a11yKnowsWatching  (A11y已绑定 + LastPkg=短视频 → 跳过轮询)
+├── a11yKnowsNotWatching (A11y已绑定 + LastPkg=已知非短视频 → 跳过轮询)
+├── 轮询兜底 (N=5, 仅用于 A11y 断开或 LastPkg 非短视频/已知)
+├── 过度扣除补偿 (consumeA11yConfirmTicks → QuotaAccumulator.compensate)
+└── MIUI 三层适配
+    ├── exported=true (A11y 服务绑定)
+    ├── A11Y_WATCHDOG_MS=60s (全屏视频停发事件)
+    └── SYSTEM_OVERLAY_PACKAGES 含 MIUI 特有包名
+```
+
+### 关键教训
+
+1. **没有单一信号源在所有设备上都可靠**。A11y 在 AOSP/Pixel 上完美运行，但在 MIUI 全屏视频时静默。UsageStats 在 AOSP 上 ~15% 丢包，MIUI 上 ~50%。
+2. **"轮询唯一真理"是一个错误的假设**。它假定 UsageStats 的 false 是真实信号，但 50% 的 false 来自丢包。当 A11y LastPkg 明确指向短视频时，应优先信任 A11y。
+3. **诊断日志是定位这类问题的唯一高效手段**（详见 **ADR-0006**）。3 份日志驱动了 5 次精准修复。如果没有诊断日志，将无法区分"未绑定"、"已绑定无事件"、"已绑定有事件但被轮询覆盖"、"已绑定但被轮询延迟覆盖"这四种截然不同的故障模式。
+
+### 待改进项
 
 - **键盘输入法包名覆盖**：输入法弹出时 `packageName` 非 null，覆盖 `lastForegroundPackage` 导致检测丢失。计划通过输入法包名白名单在事件入口拦截（方案 A）
 - **B 站 Activity 白名单远程更新**：B 站版本更新可能导致 Activity 名变化，计划通过 GitHub Raw JSON 热更新
-- **`isEffectivelyConnected` 短视频包名信任副作用**：revised.2 信任短视频包名无超时 + revised.3 null 不覆盖 → 切出后包名残留，需增加"最近是否有 null 事件"的判断
+- **补偿参数的 ROM 自适应**：当前补偿按通用消耗速率（10/16 点/分钟）计算，理论上精确。可在未来版本验证不同 ROM 下的精度

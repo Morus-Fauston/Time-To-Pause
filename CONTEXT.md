@@ -17,15 +17,37 @@
 
 净速率：白天 -5 点/分钟，夜间 -13 点/分钟。即看 1 分钟约需休息 2 分钟（白天）或 5 分钟（夜间）回本。
 
-### 检测架构（v0.2.3 — 白名单轮询架构）
-- **轮询为主，A11y 加速**：`UsageStatsManager` 每秒查询是检测的**唯一持续真相来源**。A11y 事件仅做瞬态状态跳转（快路径），不做持续判定
-- **A11y 白名单触发**：只有以下事件才触发状态变化：
-  - 短视频包名（白名单）→ 即时切换 WATCHING
-  - 已知非短视频 App（Launcher/微信/Chrome 等白名单）→ 触发 LEAVING（退出检测）
-  - **其他所有包名（系统弹窗、未知 App）→ 忽略，不影响状态**
-- **轮询 N=3 确认**：所有状态切换前必须经过连续 3 次一致确认，消除 30% 丢包振荡
-- **方向优先原则**：宁可多消耗不可错误恢复——检测不确定时保持当前方向
-- **删除旧模式**：不再依赖 keepalive 时间戳、wall-clock 比较、独立降级分支
+### 检测架构（v0.2.4.revised.5 — A11y 优先 + 轮询兜底 + 补偿）
+
+经历了 4 个架构阶段（详见 ADR-0003 和 ADR-0005，以及 CHANGELOG.md 的完整修复历程）：
+
+| 阶段 | 版本 | 原则 | 结果 |
+|:----|:-----|:-----|:-----|
+| L1 | v0.2.0.revised.1~11 | A11y 主 + 轮询备选 | 系统弹窗穷举不尽，11 次修订失败 |
+| L2 | v0.2.1 | 四状态机 + 纯逻辑重构 | 代码质量提升，根本矛盾未解 |
+| L3 | v0.2.2~revised.1 | A11y 快路径 + 轮询慢路径 + N=3 | N=3 在 MIUI 上振荡率 12.5% |
+| **L4** | **v0.2.3~v0.2.4.revised.5** | **A11y 优先 + 轮询兜底 + 补偿** | **所有已知场景稳定 ✅** |
+
+#### 当前核心原则
+- **A11y 优先**：`a11yKnowsWatching` (A11y已绑定 + LastPkg=短视频) → 跳过轮询直接"在看"
+- **A11y 退出优先**：`a11yKnowsNotWatching` (A11y已绑定 + LastPkg=已知非短视频) → LEAVING 中跳过轮询，防止 UsageStats 延迟返回 true 覆盖 A11y 退出判定
+- **轮询兜底**：仅在 A11y 断开或 LastPkg 非短视频/已知非短视频时启用 (N=5)
+- **过度扣除补偿**：LEAVING 方向优先期间过度扣除的 tick 按消耗速率实时补偿回额度
+- **A11y 白名单触发**（继承自 L2）：
+  - 短视频包名事件 → 即时 WATCHING
+  - 已知非短视频 App 事件 + 当前 WATCHING → 即时 LEAVING
+  - **系统弹窗、未知 App → 完全忽略，不影响状态**
+- **方向优先**：宁可多消耗不可错误恢复
+
+#### MIUI 特有适配（完整清单）
+| 适配 | 原因 | 修复版本 |
+|:----|:-----|:---------|
+| `exported=true` | A11y 服务需被系统跨进程绑定 | revised |
+| `A11Y_WATCHDOG_MS = 60s` | MIUI 全屏视频停发 A11y 事件 | revised.2 |
+| `SYSTEM_OVERLAY_PACKAGES` 含 MIUI 包名 | `com.miui.misound` 等覆盖 LastPkg | revised.2 |
+| `POLL_CONFIRMATION_THRESHOLD = 5` | MIUI 上 UsageStats 丢包率 ~50% | revised.2→3 |
+| `a11yKnowsWatching` 用 `_isConnected` | watchdog 到期后 `isEffectivelyConnected=false` 但 A11y 存活 | revised.3→4 |
+| `a11yKnowsNotWatching` + 补偿 | 退出时轮询延迟覆盖 A11y 导致多扣 | revised.5 |
 
 ### 后台计时架构
 - **秒级实时模式**：`QuotaService` 内 `Handler.postDelayed(1s)` 的 `secondRunnable`——每秒执行：检测前台 App（优先走 `ForegroundMonitorService` 事件驱动，备选走 `UsageStatsManager` 5 秒窗口）→ 按每秒费率（如 -10/60 ≈ -0.167）累加到 `_exactQuota`（Float）→ 取整持久化 → 驱动 UI 更新
@@ -99,10 +121,23 @@
   - 若额度仍为 0（冻结时的值）→ 触发干预蒙层
   - 若冻结时额度 > 0 → 恢复正常消耗/恢复模式
 
-### 诊断日志（v0.2.2+）
-- **用途**：定位检测/额度异常的根本原因，替代"改代码猜 6 个版本"的调试方式
-- **记录内容**：每秒一个 tick 记录——状态机 state、isWatching、exactQuota、delta、持久化额度
-- **存储方式**：环形缓冲区（内存，最多保留最近 N 条），不持久化
-- **导出方式**：Logcat 实时输出（开发用）+ DebugActivity 中导出为文本文件（远程排查用）
+### 诊断日志（v0.2.2+，详见 ADR-0006）
+- **用途**：定位检测/额度异常的根本原因，替代"改代码猜 6 个版本"的调试方式。3 份日志驱动了 5 次精准修复
+- **记录内容**：每秒一个 tick 记录——状态机 state、isWatching、exactQuota、delta、持久化额度、A11y 模式
+- **存储方式**：环形缓冲区（内存，最多保留最近 3600 条 ≈ 1 小时）
+- **导出方式**：Logcat 实时输出（tag: TTP-Diag）+ DebugActivity 中导出为文本文件
 - **触发条件**：仅调试模式开启时记录，正式版不记录
+- **诊断列说明**：
+
+| 列名 | 含义 | 代码来源 | 典型值 |
+|:----|:-----|:---------|:-------|
+| Mode | 连接模式 | `isEffectivelyConnected` | `实时` / `轮询` |
+| **Bind** | 系统是否绑定服务 | `_isConnected` | `yes` / `no` |
+| A11y | 是否有效连接 | `isEffectivelyConnected` | `yes` / `no` |
+| LastPkg | 最后前台包名 | `lastForegroundPackage` | 包名或 `-` |
+
+**诊断模式匹配**：
+- `Bind=no, A11y=no` → 系统从未绑定服务（manifest exported 问题 / OEM 限制）
+- `Bind=yes, A11y=no` → 已绑定但无事件（全屏视频停发 / watchdog 过期）
+- `Bind=yes, A11y=yes` → 正常工作
 

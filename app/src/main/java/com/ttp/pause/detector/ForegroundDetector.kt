@@ -55,6 +55,8 @@ object ForegroundDetector {
     private var _lastEventTimestamp: Long = 0L
     private var _pollConfirmCount: Int = 0
     private var _pollDirection: Boolean = false
+    /** A11y 确认用户不在看但 LEAVING 尚未完成的 tick 数（用于补偿） */
+    private var _a11yNotWatchingTicks: Int = 0
 
     /** 最近一次检测到的前台包名（仅用于外部查询） */
     private var _lastForegroundPackage: String? = null
@@ -69,7 +71,7 @@ object ForegroundDetector {
     val isEffectivelyConnected: Boolean
         get() {
             if (!_isConnected || !_hasReceivedFirstEvent) return false
-            return System.currentTimeMillis() - _lastEventTimestamp < 10000L
+            return System.currentTimeMillis() - _lastEventTimestamp < Constants.A11Y_WATCHDOG_MS
         }
 
     // =========================================================
@@ -129,6 +131,13 @@ object ForegroundDetector {
         // 所有其他包名（系统弹窗、未知 App、已知非短视频但不在 WATCHING）→ 忽略状态
     }
 
+    /** 读取并消耗 A11y 确认退出期间的过度扣除 tick 数（用于补偿） */
+    fun consumeA11yConfirmTicks(): Int {
+        val ticks = _a11yNotWatchingTicks
+        _a11yNotWatchingTicks = 0
+        return ticks
+    }
+
     fun onDestroy() {
         if (_state == State.WATCHING) _pollDirection = true
         _state = State.LEAVING
@@ -138,6 +147,7 @@ object ForegroundDetector {
         _lastForegroundActivity = null
         _lastEventTimestamp = 0L
         _pollConfirmCount = 0
+        _a11yNotWatchingTicks = 0
     }
 
     // =========================================================
@@ -159,16 +169,62 @@ object ForegroundDetector {
     }
 
     // =========================================================
-    // 状态处理（轮询真相来源）
+    // A11y 辅助判定
     // =========================================================
 
     /**
-     * WATCHING：每秒轮询。命中 → 稳定。N 次未命中 → LEAVING。
+     * A11y 是否知道用户正在刷短视频。
      *
-     * 没有 A11y 快捷路径——即使 A11y 存活，也以轮询为准。
-     * 这确保 A11y 断开/卡死时仍然能正确退出。
+     * 条件：
+     * 1. A11y 服务已被系统绑定（`_isConnected`）
+     * 2. 最近一次通过 A11y 检测到的前台包名是短视频 App
+     *
+     * 注意：使用 `_isConnected` 而非 `isEffectivelyConnected`。
+     * 因为 MIUI 在全屏视频播放期间会停发 TYPE_WINDOW_STATE_CHANGED 事件，
+     * 导致 watchdog 到期后 `isEffectivelyConnected=false`，但
+     * `_lastForegroundPackage` 仍保留最后一次有效检测结果（抖音包名）。
+     * 这是确定性证据——用户确实在刷。
+     *
+     * 使用 `_isConnected` 的安全性保障：
+     * - 用户切到微信等已知 App → A11y 事件立即更新 `_lastForegroundPackage` → 条件不满足
+     * - A11y 服务被杀死 → `onDestroy()` 设 `_isConnected=false` → 条件不满足
+     * - 唯一风险窗口：MIUI 静默期间，此时轮询不可靠，信任最后一次 A11y 结果是最优选择
+     */
+    /**
+     * A11y 知道用户在已知非短视频 App 上。
+     *
+     * 此条件是确定性证据——用户确实已经切出。
+     * 在 LEAVING 状态下，当此条件为 true 时，跳过轮询直接等 N 计数完成。
+     * 防止 UsageStats 延迟返回 true 错误地将状态拉回 WATCHING。
+     */
+    private val a11yKnowsNotWatching: Boolean
+        get() = _isConnected
+                && _lastForegroundPackage != null
+                && _lastForegroundPackage in Constants.KNOWN_NON_VIDEO_PACKAGES
+
+    private val a11yKnowsWatching: Boolean
+        get() = _isConnected
+                && _lastForegroundPackage != null
+                && (_lastForegroundPackage in Constants.SHORT_VIDEO_PACKAGES
+                    || _lastForegroundPackage == Constants.BILIBILI_PACKAGE)
+
+    // =========================================================
+    // 状态处理（A11y 优先，轮询兜底）
+    // =========================================================
+
+    /**
+     * WATCHING：A11y 优先 + 轮询兜底。
+     * - A11y 知道在看 → 重置计数器，返回 true
+     * - 轮询命中 → 稳定
+     * - N 次未命中 → LEAVING
      */
     private fun processWatching(appDetector: AppDetector): Boolean {
+        // A11y 快捷路径：LastPkg 是短视频 → 信任 A11y
+        if (a11yKnowsWatching) {
+            _pollConfirmCount = 0
+            return true
+        }
+
         val pollResult = appDetector.isWatchingShortVideo()
 
         if (pollResult) {
@@ -187,17 +243,43 @@ object ForegroundDetector {
     }
 
     /**
-     * LEAVING：每秒轮询。
-     * - 命中 → 立即回 WATCHING（撤销离开）
+     * LEAVING：A11y 优先 + 轮询兜底。
+     * - A11y 知道在看 → 立即回 WATCHING
+     * - A11y 知道不在看 → 跳过轮询，等 N 计数完成 → NOT_WATCHING
+     *   （防止 UsageStats 延迟返回 true 错误地将状态拉回 WATCHING）
+     * - 轮询命中（且 A11y 不确定）→ 立即回 WATCHING
      * - N 次未命中 → NOT_WATCHING
-     * - 确认中 → 返回 _pollDirection（从 WATCHING 继承的 true）
      */
     private fun processLeaving(appDetector: AppDetector): Boolean {
+        // A11y 快捷路径：LastPkg 是短视频 → 撤销离开
+        if (a11yKnowsWatching) {
+            _state = State.WATCHING
+            _pollConfirmCount = 0
+            _a11yNotWatchingTicks = 0
+            _pollDirection = true
+            return true
+        }
+
+        // A11y 知道用户不在看 → 跳过轮询，信任 A11y
+        if (a11yKnowsNotWatching) {
+            _pollConfirmCount++
+            _a11yNotWatchingTicks++  // 记录过度扣除的 tick
+            if (_pollConfirmCount >= Constants.POLL_CONFIRMATION_THRESHOLD) {
+                _state = State.NOT_WATCHING
+                _pollConfirmCount = 0
+                _pollDirection = false
+                return false
+            }
+            // 计数中 → 仍返回方向优先（true）
+            return _pollDirection
+        }
+
         val pollResult = appDetector.isWatchingShortVideo()
 
         if (pollResult) {
             _state = State.WATCHING
             _pollConfirmCount = 0
+            _a11yNotWatchingTicks = 0
             _pollDirection = true
             return true
         }
@@ -206,6 +288,7 @@ object ForegroundDetector {
         if (_pollConfirmCount >= Constants.POLL_CONFIRMATION_THRESHOLD) {
             _state = State.NOT_WATCHING
             _pollConfirmCount = 0
+            _a11yNotWatchingTicks = 0
             _pollDirection = false
             return false
         }
@@ -213,14 +296,20 @@ object ForegroundDetector {
     }
 
     /**
-     * NOT_WATCHING：每秒轮询。
-     * - N 次连续命中 → WATCHING
+     * NOT_WATCHING：A11y 优先 + 轮询兜底。
+     * - A11y 知道在看 → 立即回 WATCHING
+     * - 轮询 N 次连续命中 → WATCHING
      * - 其余 → false
-     *
-     * 注意：没有 A11y 快捷跳过。即使 A11y 说"用户在非短视频 App"，
-     * 也仍然每秒轮询。这是为了覆盖 A11y 卡死/断开但 _isConnected 仍为 true 的场景。
      */
     private fun processNotWatching(appDetector: AppDetector): Boolean {
+        // A11y 快捷路径：LastPkg 是短视频 → 立即回 WATCHING
+        if (a11yKnowsWatching) {
+            _pollConfirmCount = 0
+            _state = State.WATCHING
+            _pollDirection = true
+            return true
+        }
+
         val pollResult = appDetector.isWatchingShortVideo()
 
         if (pollResult == _pollDirection) {

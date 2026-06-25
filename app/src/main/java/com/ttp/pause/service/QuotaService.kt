@@ -76,6 +76,7 @@ class QuotaService : Service() {
                     overlayShown = overlayManager.isInterventionShowing,
                     connectionMode = if (ForegroundDetector.isEffectivelyConnected) "实时" else "轮询",
                     a11yConnected = ForegroundDetector.isEffectivelyConnected,
+                    a11yBindConnected = ForegroundDetector.isConnected,
                     lastPkg = ForegroundDetector.lastForegroundPackage,
                     lastActivity = ForegroundDetector.lastForegroundActivity
                 )
@@ -96,32 +97,46 @@ class QuotaService : Service() {
             val isWatching = ForegroundDetector.isCurrentlyWatching(appDetector)
 
             // === 额度累积（委托给 QuotaAccumulator） ===
-            val tickResult = accumulator.tick(isWatching, engine.isDayTime(now))
-            if (tickResult.quota != quotaStore.quota) {
-                quotaStore.quota = tickResult.quota
+            val isDaytime = engine.isDayTime(now)
+            val tickResult = accumulator.tick(isWatching, isDaytime)
+
+            // === 补偿：A11y 确认退出但 LEAVING 未完成期间的过度扣除 ===
+            // 当 A11y（LastPkg=已知非短视频）确认用户已离开时，跳过 polling
+            // 但仍因方向优先返回 true（过度消耗）。补偿将这些 tick 按消耗
+            // 速率加回额度。
+            val a11yTicks = ForegroundDetector.consumeA11yConfirmTicks()
+            if (a11yTicks > 0) {
+                val quotaPerTick = (if (isDaytime) 10f else 16f) / 60f
+                accumulator.compensate(a11yTicks * quotaPerTick)
+            }
+
+            // 取最终取整额度（含补偿）判断是否持久化
+            val finalQuota = accumulator.quota
+            if (finalQuota != quotaStore.quota) {
+                quotaStore.quota = finalQuota
             }
             quotaStore.lastTickTime = now
             updateNotification()
 
             overlayManager.update(
-                quota = tickResult.quota,
+                quota = finalQuota,
                 isWatching = isWatching,
                 inGracePeriod = false
             )
 
             // === 诊断日志（每个 tick 记录一次） ===
-            val isDaytime = engine.isDayTime(now)
             DiagnosticLogger.record(
                 state = ForegroundDetector.currentState,
                 isWatching = isWatching,
                 exactQuota = accumulator.exactQuota(),
                 delta = tickResult.delta,
-                persistedQuota = tickResult.quota,
+                persistedQuota = finalQuota,
                 isDaytime = isDaytime,
                 inGracePeriod = false,
                 overlayShown = overlayManager.isInterventionShowing,
                 connectionMode = if (ForegroundDetector.isEffectivelyConnected) "实时" else "轮询",
                 a11yConnected = ForegroundDetector.isEffectivelyConnected,
+                a11yBindConnected = ForegroundDetector.isConnected,
                 lastPkg = ForegroundDetector.lastForegroundPackage,
                 lastActivity = ForegroundDetector.lastForegroundActivity
             )
