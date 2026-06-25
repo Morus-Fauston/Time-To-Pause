@@ -2,68 +2,22 @@ package com.ttp.pause.detector
 
 import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityEvent
-import com.ttp.pause.Constants
 import com.ttp.pause.service.QuotaService
 
 /**
  * 前台应用监控服务（AccessibilityService）
  *
- * 主方案：通过监听 TYPE_WINDOW_STATE_CHANGED 实时获取前台包名。
- * 应用切换瞬间触发，无需轮询。
+ * 职责缩减为：接收系统事件，委托给 [ForegroundDetector] 处理。
+ * 所有检测逻辑（包名追踪、keepalive、多信号源融合）已移至 ForegroundDetector。
  *
- * QuotaService 的 secondRunnable 优先从此类获取前台状态，
- * 仅当 isConnected == false 时降级到 UsageStatsManager 轮询。
+ * 这是一条"深模块" seam——接口极简（onAccessibilityEvent 委托），
+ * 背后承载了复杂的多信号源融合逻辑。
  */
 class ForegroundMonitorService : AccessibilityService() {
 
-    companion object {
-        /** 最近一次检测到的前台包名，null=未知/桌面 */
-        var lastForegroundPackage: String? = null
-
-        /** 最近一次检测到的前台 Activity 类名（用于 B 站 Activity 级检测） */
-        var lastForegroundActivity: String? = null
-
-        /** 无障碍服务是否已连接 */
-        var isConnected: Boolean = false
-            private set
-
-        /** 是否已收到第一个事件（连接后首个事件到来前不算有效连接） */
-        var hasReceivedFirstEvent: Boolean = false
-            private set
-
-        /** 最近一次事件的时间戳，用于 watchdog 检测服务是否真实存活 */
-        var lastEventTimestamp: Long = 0L
-            private set
-
-        /**
-         * 服务是否真实存活且可供检测使用
-         *
-         * 策略：
-         * - 若 lastForegroundPackage 是已知短视频 App（抖音/快手/TikTok/微视/B站），
-         *   直接信任检测结果，不设超时。
-         *   因为这些 App 使用单 Activity 架构，用户滑动视频时不会触发
-         *   TYPE_WINDOW_STATE_CHANGED，前一版 5s watchdog 会导致静置观看时
-         *   误判为"服务已死"而错误降级到轮询。
-         *
-         * - 若 lastForegroundPackage 是其他 App（或 null），走 watchdog 5s 超时。
-         *   这覆盖了"服务被系统静默杀死，但 isConnected 仍为 true"的兜底保护。
-         */
-        val isEffectivelyConnected: Boolean
-            get(): Boolean {
-                if (!isConnected || !hasReceivedFirstEvent) return false
-                val pkg = lastForegroundPackage
-                // 已知短视频 App → 信任检测结果，不设超时
-                if (pkg in Constants.SHORT_VIDEO_PACKAGES || pkg == Constants.BILIBILI_PACKAGE) {
-                    return true
-                }
-                // 非短视频 App 或 null → watchdog 5s 存活检测
-                return (System.currentTimeMillis() - lastEventTimestamp < 5000L)
-            }
-    }
-
     override fun onServiceConnected() {
         super.onServiceConnected()
-        isConnected = true
+        ForegroundDetector.onServiceConnected()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -71,21 +25,11 @@ class ForegroundMonitorService : AccessibilityService() {
             val pkg = event.packageName?.toString()
             val activity = event.className?.toString()
 
-            // 注意: TYPE_WINDOW_STATE_CHANGED 也会为系统事件触发
-            // (通知栏、锁屏、最近任务、键盘、系统弹窗等),
-            // 此时 packageName 通常为 null.
-            //
-            // 绝不能把 lastForegroundPackage 覆盖为 null, 否则检测会永久丢失.
-            // 系统事件更新 lastEventTimestamp 保持 watchdog 存活即可.
-            if (pkg != null) {
-                lastForegroundPackage = pkg
-                lastForegroundActivity = activity
-            }
-            lastEventTimestamp = System.currentTimeMillis()
-            if (!hasReceivedFirstEvent) {
-                hasReceivedFirstEvent = true
-            }
-            // 即时通知 QuotaService（秒级 tick 也会读取，但事件触发更及时）
+            // 委托给 ForegroundDetector 处理内部状态
+            ForegroundDetector.onAccessibilityEvent(pkg, activity)
+
+            // 即时通知 QuotaService（秒级 tick 也会通过 ForegroundDetector
+            // 读取状态，但事件触发时直接通知更及时）
             QuotaService.currentInstance?.onForegroundChanged(pkg, activity)
         }
     }
@@ -96,10 +40,6 @@ class ForegroundMonitorService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        isConnected = false
-        hasReceivedFirstEvent = false
-        lastForegroundPackage = null
-        lastForegroundActivity = null
-        lastEventTimestamp = 0L
+        ForegroundDetector.onDestroy()
     }
 }

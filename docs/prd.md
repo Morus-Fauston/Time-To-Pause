@@ -1,6 +1,6 @@
 # PRD: 「停一下吧 (Time To Pause)」
 
-> 版本: 1.4 | 日期: 2026-06-25 | 状态: Draft
+> 版本: 1.5 | 日期: 2026-06-25 | 状态: Draft
 
 ---
 
@@ -22,7 +22,7 @@
 - **宽限**：答题换 5 分钟。宽限期间**额度完全冻结**——不消耗也不恢复，仅暂停干预。
 - **悬浮球**：默认始终显示（可在设置中关闭：仅在看短视频时显示）。宽限期间切换为倒计时模式（剩余秒数 + 外圈进度环递减）。
 - **蒙层**：非对抗性视觉干预。可选两种方向——**温和干预**（渐变呼吸动画，强调自我觉察）或**视觉剥夺**（漂白+背景模糊+动态噪点，各三档强度）。不拦截下层触控。
-- **检测**：AccessibilityService 事件驱动（推荐），未开启时自动降级到 5 秒窗口轮询备选。
+- **检测（v0.2.3+）**：**轮询为主，A11y 加速**。UsageStatsManager 每秒查询是唯一持续真相来源（N=3 确认）。AccessibilityService 仅做瞬态状态跳转。系统弹窗和未知 App 事件完全忽略。方向优先——宁可多消耗不可错误恢复。
 
 ## User Stories
 
@@ -30,7 +30,7 @@
 1. 作为一个每天刷抖音通勤的用户，我想在刷视频时看到额度实时减少，以便了解自己已经刷了多久。
 2. 作为一个有自控意愿的用户，我想在停止刷短视频时看到额度自动恢复，以便知道自己"回血"了多少。
 3. 作为一个在意时间流逝的用户，我想悬浮球始终显示在屏幕上（不限于刷短视频时），并且环形进度条持续平滑动画，以便像时钟一样随时感知额度变化。
-4. 作为一个在 B 站看长视频的用户，我想我的额度不会因为看长视频而消耗，以便不误伤正常使用。
+4. 作为一个在 B 站看长视频的用户，我想我的额度不会因为长视频而消耗，以便不误伤正常使用。
 <!-- 预留：25. 模式切换 -->
 
 ### 干预与宽限
@@ -74,7 +74,7 @@
 
 项目按职责划分为以下模块，对应 `com.ttp.pause` 包下的子包：
 
-- **detector**（`AppDetector` + `ForegroundMonitorService`）— 前台应用检测。**主方案（默认）**：`ForegroundMonitorService`（AccessibilityService）通过 `TYPE_WINDOW_STATE_CHANGED` 事件实时获取前台包名。**备选方案**：`UsageStatsManager` 5 秒窗口轮询（每秒执行），在 AccessibilityService 未连接时自动降级。包名匹配通过 `AppDetector.isShortVideoApp()` 和 `isBilibili()` 完成。B 站通过 `BILIBILI_SHORT_VIDEO_ACTIVITIES` 白名单区分短视频/长视频（仅 AccessibilityService 模式下生效，降级轮询时全按短视频计）。
+- **detector**（`AppDetector` + `ForegroundMonitorService`）— 前台应用检测。**v0.2.3+ 架构**：轮询为主、A11y 加速。`UsageStatsManager` 每秒查询是唯一的持续真相来源，连续 N=3 次一致才切换状态。`ForegroundMonitorService`（AccessibilityService）仅做瞬态跳转——短视频包名事件即时 WATCHING，已知非短视频 App 事件即时 LEAVING。系统弹窗和未知 App 事件完全忽略，不影响任何状态。包名判定通过 `AppDetector.isShortVideoApp()` 和 `isBilibili()` 完成，已知非短视频 App 白名单 `KNOWN_NON_VIDEO_PACKAGES` 包含 Launcher、社交、浏览器等 23 个包名。B 站通过 `BILIBILI_SHORT_VIDEO_ACTIVITIES` 白名单区分短视频/长视频。
 - **data**（`QuotaStore`）— 额度持久化。使用 `SharedPreferences` 存储 3 个字段：`quota`（0-100）、`grace_end_timestamp`（宽限结束时间戳）、`last_tick_time`（最后更新时刻）。数据量极小（仅 3 个 key-value），无需 DataStore。
 - **service**（`QuotaService`）— 后台核心驱动力。`ForegroundService` 内 `Handler.postDelayed(1s)` 循环（`secondRunnable`），每秒统一执行：检测前台 App（优先读 `ForegroundMonitorService.lastForegroundPackage`，降级读 `AppDetector`）→ 按每秒费率（Float）累加到 `_exactQuota` → 取整持久化 → 驱动 UI 更新。同时负责宽限计时、通知栏更新、回溯恢复。
 - **receiver**（`BootReceiver`）— 开机自启。通过 `PackageManager.setComponentEnabledSetting` 动态启用/禁用（默认关闭），用户可在初始化引导中选择开启。
@@ -83,11 +83,11 @@
 
 - **后台 tick 采用 ForegroundService + Handler，不用 WorkManager**。WorkManager 最小间隔 15 分钟，不满足更新需求。Service 内 Handler 是进程内轻量定时器。（参见 ADR-0001）
 - **全量使用 XML + View 体系，不用 Jetpack Compose**。VS Code 对 Compose 无实时预览；悬浮球和蒙层需要 `WindowManager` 直接操作 View 层级，Compose 在此场景下不受支持。（参见 ADR-0002）
-- **检测采用 AccessibilityService 事件驱动（主方案）+ UsageStats 5s 轮询（备选），不用内容分析**。AccessibilityService 监听 `TYPE_WINDOW_STATE_CHANGED` 实现实时前台检测，未开启时降级到 UsageStatsManager 5 秒窗口轮询。所有检测在本地完成、不上传任何数据。（参见 ADR-0003）
+- **检测采用白名单轮询架构（v0.2.3+）**：轮询（UsageStatsManager）是唯一持续真相来源，A11y 事件仅做瞬态跳转。系统弹窗和未知 App 事件完全忽略。方向优先——宁可多消耗不可错误恢复。连续 N=3 确认消除 30% 丢包振荡。（参见 ADR-0005，替代 ADR-0003）
 - **UI 技术栈**：XML + AppCompat + ConstraintLayout + WindowManager（悬浮球/蒙层）。
 - **检测与结算合一**：单个 `secondRunnable` 每秒同时做检测、计算、UI 更新。
 
-### 核心状态机
+### 检测状态机（v0.2.3+）
 
 ```
                   ┌─────────────┐

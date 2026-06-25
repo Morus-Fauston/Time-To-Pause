@@ -70,4 +70,15 @@ class QuotaStore(context: Context) {
     fun endGrace() {
         graceEndTimestamp = 0L
     }
+
+    // =========================================================
+    // 诊断日志开关
+    // =========================================================
+
+    /**
+     * 诊断日志是否开启
+     */
+    var diagEnabled: Boolean
+        get() = prefs.getBoolean(Constants.KEY_DIAG_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(Constants.KEY_DIAG_ENABLED, value).apply()
 }

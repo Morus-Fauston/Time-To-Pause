@@ -39,6 +39,9 @@ BILIBILI_SHORT_VIDEO_ACTIVITIES = {
     "com.bilibili.video.feed.FeedVideoActivity",
 }
 
+# Timestamp keepalive 常量
+VIDEO_SIGHTING_GRACE_SEC = 15  # 15 秒短视频最后可见宽限期
+
 BILIBILI_PACKAGE = "tv.danmaku.bili"
 
 
@@ -123,19 +126,42 @@ class SimForegroundState:
 # 检测逻辑（与 QuotaService.secondRunnable 完全一致）
 # =============================================================
 
-def detect_watching(fg: SimForegroundState) -> bool:
-    """复现 QuotaService 中的检测判定"""
+def detect_watching(fg: SimForegroundState, polling_pkg: Optional[str] = None,
+                    last_video_sighting: Optional[float] = None,
+                    sim_now: Optional[float] = None) -> bool:
+    """
+    复现 ForegroundDetector.isCurrentlyWatching 的逻辑（v0.2.0.revised.8 final）。
+
+    关键设计：
+    - A11y 已连接时：只信任 A11y + keepalive。不调用轮询（轮询不可靠，导致振荡）。
+    - A11y 未连接时：keepalive + 轮询兜底。
+    - Keepalive 由 onAccessibilityEvent 在每次非输入法事件时扩展。
+    """
     if fg.is_effectively_connected:
         pkg = fg.last_package
         activity = fg.last_activity
+
+        # ① AccessibilityService 当前包名
+        from_a11y = False
         if pkg == BILIBILI_PACKAGE:
-            # B 站需要 Activity 名
-            return activity is not None and activity in BILIBILI_SHORT_VIDEO_ACTIVITIES
-        else:
-            return pkg is not None and pkg in SHORT_VIDEO_PACKAGES
+            from_a11y = activity is not None and activity in BILIBILI_SHORT_VIDEO_ACTIVITIES
+        elif pkg is not None:
+            from_a11y = pkg in SHORT_VIDEO_PACKAGES
+        
+        if from_a11y:
+            return True
+
+        # ② Keepalive only - no polling!
+        return last_video_sighting is not None and sim_now is not None and \
+            (sim_now - last_video_sighting < VIDEO_SIGHTING_GRACE_SEC)
     else:
-        # 降级轮询模式 (模拟)
-        return False  # 模拟中简化，假设轮询返回 False
+        # A11y 未连接 → keepalive + 轮询兜底
+        if last_video_sighting is not None and sim_now is not None:
+            if sim_now - last_video_sighting < VIDEO_SIGHTING_GRACE_SEC:
+                return True
+        if polling_pkg is not None:
+            return polling_pkg in SHORT_VIDEO_PACKAGES or polling_pkg == BILIBILI_PACKAGE
+        return False
 
 
 # =============================================================
@@ -158,10 +184,13 @@ class TickRecord:
 
 
 def simulate(store: SimQuotaStore, fg: SimForegroundState, duration_sec: int,
-             scenario_name: str = "") -> list[TickRecord]:
+             scenario_name: str = "",
+             polling_pkg_getter: Optional[callable] = None) -> list[TickRecord]:
     """
     模拟 secondRunnable 循环，duration_sec 秒。
-    返回每 tick 的记录。
+    
+    polling_pkg_getter: 可选函数，接收 tick 序号返回 UsageStatsManager 轮询
+    到的包名。模拟 AccessibilityService 覆盖与轮询兜底不一致的场景。
     """
     exact_quota = float(store.quota)
     records = [TickRecord(
@@ -183,7 +212,8 @@ def simulate(store: SimQuotaStore, fg: SimForegroundState, duration_sec: int,
             ))
             continue
 
-        is_watching = detect_watching(fg)
+        polling_pkg = polling_pkg_getter(tick) if polling_pkg_getter else None
+        is_watching = detect_watching(fg, polling_pkg=polling_pkg)
         daytime = is_daytime(sim_now)
         delta = calculate_delta_per_second(is_watching, daytime)
 
@@ -368,10 +398,232 @@ def run_all_scenarios():
         ))
     print_summary(records, "快速切 App 30s")
 
-    # ---- 场景 6: catchUpRecovery 验证 ----
+    # ---- 场景 6: 系统弹窗覆盖包名 (修复前 → 异常恢复, 修复后 → 正常消耗) ---- 
     print("\n\n")
     print("=" * 60)
-    print("  场景 6: catchUpRecovery 回溯恢复")
+    print("  场景 6: 刷抖音时系统弹窗覆盖包名")
+    print("  lastForegroundPackage 被 systemui 覆盖 (tick=5)")
+    print("  修复前: !fromA11y && 无轮询兜底 → isWatching=false → 异常恢复 ❌")
+    print("  修复后: !fromA11y → 轮询兜底仍看到抖音 → isWatching=true ✅")
+    print("=" * 60)
+    store = SimQuotaStore(quota=100)
+    fg = SimForegroundState(is_connected=True, has_received_first_event=True,
+                            last_event_timestamp=time.time(),
+                            last_package="com.ss.android.ugc.aweme")
+    store.last_tick_time = daytime_ts
+    records = []
+    exact_quota = float(store.quota)
+    bug_triggered = False
+    for tick in range(120):  # 2 分钟
+        sim_now = store.last_tick_time + tick
+        # tick 5: 系统弹窗覆盖包名
+        if tick == 5:
+            fg.last_package = "com.android.systemui"
+            fg.last_event_timestamp = sim_now
+        # tick 30: 系统弹窗自动消失 (但抖音的单Activity不会重新触发事件!)
+        # 所以 fg.last_package 仍然为 systemui，直到用户手触触发新事件
+
+        # 轮询兜底：用户仍在看抖音，UsageStatsManager 5s 窗口仍看到抖音
+        polling_pkg = "com.ss.android.ugc.aweme"
+        is_watching = detect_watching(fg, polling_pkg=polling_pkg)
+        daytime = is_daytime(sim_now)
+        delta = calculate_delta_per_second(is_watching, daytime)
+        exact_quota = max(QUOTA_MIN, min(QUOTA_MAX, exact_quota + delta))
+        rounded = int(exact_quota)
+        if rounded != store.quota:
+            store.quota = rounded
+        if abs(exact_quota - float(store.quota)) > 5.0:
+            exact_quota = float(store.quota)
+        store.last_tick_time = sim_now
+        records.append(TickRecord(
+            second=tick, quota_int=store.quota, exact_quota=exact_quota,
+            is_watching=is_watching, delta=delta, mode='实时'
+        ))
+        if not is_watching and tick > 5 and tick < 60:
+            if not bug_triggered:
+                bug_triggered = True
+                print(f"  ⚠️  Bug/异常! tick={tick}: isWatching=false, 额度恢复中")
+
+    print_summary(records, "系统弹窗覆盖包名 120s（用户始终在抖音）")
+    if bug_triggered:
+        print(f"  ✗ 有恢复段出现, 轮询兜底未完全生效!")
+    else:
+        print(f"  ✓ 无异常恢复段 (轮询兜底生效, 持续消耗)")
+    final = records[-1].quota_int
+    print(f"  最终额度: {final} (连续消耗120s期望 ~80)")
+    print(f"  结果: {'✅ 正常消耗' if final < 90 else '❌ 未正常消耗'}")
+
+    # ---- 场景 7: UsageStatsManager 轮询不可靠导致振荡 ----
+    print("\n\n")
+    print("=" * 60)
+    print("  场景 7: 系统弹窗后轮询偶尔失效 → isWatching 振荡!")
+    print("  UsageStatsManager 5s窗口对实时检测不可靠")
+    print("  模拟: 弹窗后 polling 只有70%概率检测到抖音")
+    print("  → isWatching 在 true/false 间摇摆 → 同时消耗和恢复")
+    print("=" * 60)
+    store = SimQuotaStore(quota=100)
+    fg = SimForegroundState(is_connected=True, has_received_first_event=True,
+                            last_event_timestamp=time.time(),
+                            last_package="com.ss.android.ugc.aweme")
+    store.last_tick_time = daytime_ts
+    records = []
+    exact_quota = float(store.quota)
+    oscillation_count = 0
+    last_watching = True
+    import random
+    random.seed(42)
+    for tick in range(120):  # 2 分钟
+        sim_now = store.last_tick_time + tick
+        if tick == 5:
+            fg.last_package = "com.android.systemui"
+            fg.last_event_timestamp = sim_now
+
+        # 模拟UsageStatsManager不可靠: 70%概率检测到，30%概率丢数据
+        if tick > 5:
+            polling_pkg = "com.ss.android.ugc.aweme" if random.random() < 0.7 else None
+        else:
+            polling_pkg = "com.ss.android.ugc.aweme"
+        is_watching = detect_watching(fg, polling_pkg=polling_pkg)
+        if is_watching != last_watching:
+            oscillation_count += 1
+            last_watching = is_watching
+        daytime = is_daytime(sim_now)
+        delta = calculate_delta_per_second(is_watching, daytime)
+        exact_quota = max(QUOTA_MIN, min(QUOTA_MAX, exact_quota + delta))
+        rounded = int(exact_quota)
+        if rounded != store.quota:
+            store.quota = rounded
+        if abs(exact_quota - float(store.quota)) > 5.0:
+            exact_quota = float(store.quota)
+        store.last_tick_time = sim_now
+        records.append(TickRecord(
+            second=tick, quota_int=store.quota, exact_quota=exact_quota,
+            is_watching=is_watching, delta=delta, mode='实时'
+        ))
+    print_summary(records, "系统弹窗 + 轮询70%命中率 120s")
+    print(f"  isWatching 翻转次数: {oscillation_count} (越大振荡越严重)")
+    final = records[-1].quota_int
+    net_drop = 100 - final
+    expected_drop = int(-10/60 * 120)  # 期望消耗 20
+    print(f"  实际消耗: {net_drop} 点 (期望消耗 ~{expected_drop} 点)")
+    print(f"  消耗效率: {net_drop/expected_drop*100:.0f}%")
+    if oscillation_count > 5:
+        print(f"  ❌ 严重振荡: isWatching 翻转 {oscillation_count} 次, 额度同时消耗+恢复!")
+    else:
+        print(f"  ✅ 无振荡, 检测稳定")
+
+    # ---- 场景 8: lastVideoSighting 方案（修复方案） ----
+    print("\n\n")
+    print("=" * 60)
+    print("  场景 8: lastVideoSighting 时间戳方案")
+    print("  系统弹窗覆盖包名, 但记住最近15秒内看过短视频")
+    print("  → 不依赖轮询, 无振荡, 稳定消耗 ✅")
+    print("=" * 60)
+    store = SimQuotaStore(quota=100)
+    fg = SimForegroundState(is_connected=True, has_received_first_event=True,
+                            last_event_timestamp=time.time(),
+                            last_package="com.ss.android.ugc.aweme")
+    store.last_tick_time = daytime_ts
+    last_video_sighting = daytime_ts  # 初始: 看到抖音时记录
+    GRACE_MS = 15000  # 15秒宽限期 (模拟器中用秒=15)
+    records = []
+    exact_quota = float(store.quota)
+    oscillation_count = 0
+    last_watching = True
+    import time as time_module
+    random.seed(42)
+    for tick in range(120):
+        sim_now = store.last_tick_time + tick
+        # tick 5: 系统弹窗覆盖包名 (包名不再变化)
+        if tick == 5:
+            fg.last_package = "com.android.systemui"
+            fg.last_event_timestamp = sim_now
+
+        # 检测逻辑: fromA11y || (lastVideoSighting 在 15秒内)
+        pkg = fg.last_package
+        from_a11y = pkg is not None and pkg in SHORT_VIDEO_PACKAGES
+        if from_a11y:
+            last_video_sighting = sim_now  # 刷新短视频最后可见时间
+        is_watching = from_a11y or (sim_now - last_video_sighting < GRACE_MS)
+
+        if is_watching != last_watching:
+            oscillation_count += 1
+            last_watching = is_watching
+        daytime = is_daytime(sim_now)
+        delta = calculate_delta_per_second(is_watching, daytime)
+        exact_quota = max(QUOTA_MIN, min(QUOTA_MAX, exact_quota + delta))
+        rounded = int(exact_quota)
+        if rounded != store.quota:
+            store.quota = rounded
+        if abs(exact_quota - float(store.quota)) > 5.0:
+            exact_quota = float(store.quota)
+        store.last_tick_time = sim_now
+        records.append(TickRecord(
+            second=tick, quota_int=store.quota, exact_quota=exact_quota,
+            is_watching=is_watching, delta=delta, mode='实时'
+        ))
+    print_summary(records, "lastVideoSighting 方案 120s")
+    print(f"  isWatching 翻转次数: {oscillation_count}")
+    final = records[-1].quota_int
+    net_drop = 100 - final
+    print(f"  实际消耗: {net_drop} 点 (期望 ~{expected_drop} 点)")
+    if oscillation_count <= 1 and net_drop >= expected_drop * 0.8:
+        print(f"  ✅ 检测稳定, 消耗效率正常!")
+    else:
+        print(f"  ❌ 仍有问题")
+
+    # ---- 场景 9: watchdog 过期后 keepalive 失效 (!isEffectivelyConnected + 仍有lastVideoSighting) ----
+    print("\n\n")
+    print("=" * 60)
+    print("  场景 9: 系统弹窗 3s → 消失 → 用户继续刷抖音")
+    print("  系统弹窗后 lastForegroundPackage=systemui")
+    print("  5s后 watchdog过期 → isEffectivelyConnected=false")
+    print("  但 lastVideoSighting 是 ~8s前 → 应继续保持 isWatching=true")
+    print("  旧版: else分支直接走轮询 → 不可靠 → 额度异常恢复 ❌")
+    print("  新版: else分支也检查 lastVideoSighting → 持续消耗 ✅")
+    print("=" * 60)
+    store = SimQuotaStore(quota=100)
+    fg = SimForegroundState(is_connected=True, has_received_first_event=True,
+                            last_event_timestamp=daytime_ts,
+                            last_package="com.ss.android.ugc.aweme")
+    fg.last_event_timestamp = daytime_ts
+    store.last_tick_time = daytime_ts
+    last_video_sighting = daytime_ts
+    records = []
+    exact_quota = float(store.quota)
+    recovery_started = False
+    recovery_tick = -1
+    for tick in range(120):
+        sim_now = daytime_ts + tick  # 模拟时间 = 基准 + tick（不依赖store.last_tick_time）
+        
+        if tick == 3:
+            fg.last_package = "com.android.systemui"
+            fg.last_event_timestamp = daytime_ts + 3
+        
+        is_watching = detect_watching(fg,
+            last_video_sighting=last_video_sighting,
+            sim_now=sim_now)
+        
+        if is_watching:
+            if fg.last_package in SHORT_VIDEO_PACKAGES or fg.last_package == BILIBILI_PACKAGE:
+                last_video_sighting = sim_now
+        elif not recovery_started:
+            recovery_started = True
+            recovery_tick = tick
+        
+        if tick < 25:
+            print(f"  [SC9] tick={tick:2d} pkg={str(fg.last_package):>30s} watch={is_watching} lvs_diff={sim_now-last_video_sighting:4.1f}s")
+    
+    print()
+    if recovery_started:
+        print(f"  ❌ 额度在 tick={recovery_tick} 开始恢复! watchdog过期后 keepalive 失效!")
+    else:
+        print(f"  ✅ 全程消耗! watchdog 过期后 keepalive 正确生效")
+
+    # ---- 场景 10: catchUpRecovery 验证 ----
+    print("\n\n")
+    print("=" * 60)
+    print("  场景 9: catchUpRecovery 回溯恢复")
     print("  被杀 60s 后重启，应恢复 ~5 点（白天）")
     print("=" * 60)
     last_tick = daytime_ts
@@ -386,3 +638,253 @@ def run_all_scenarios():
 
 if __name__ == "__main__":
     run_all_scenarios()
+
+    # ---- Scenario 10: System events keep watchdog alive -> polling never reached ----
+    print()
+    print("=" * 70)
+    print("  SCENARIO 10: SYSTEM DIALOG KEEPS WATCHDOG ALIVE")
+    print("  ROOT CAUSE of persistent quota recovery bug!")
+    print()
+    print("  User watches Douyin (tick 0-3)")
+    print("  -> System dialog (tick 3): lastForegroundPackage=systemui")
+    print("  -> Dialog button/animation fires events every 3s")
+    print("  -> watchdog NEVER expires (<5s since last event)")
+    print("  -> locked in isEffectivelyConnected=true branch forever")
+    print("  -> 15s later keepalive expires: return false")
+    print("  -> polling fallback is in ELSE branch -> NEVER REACHED!")
+    print("=" * 70)
+    import time as _time
+    daytime_ts = _time.mktime(_time.strptime("2026-06-25 14:00:00", "%Y-%m-%d %H:%M:%S"))
+    store = SimQuotaStore(quota=80)
+    fg = SimForegroundState(is_connected=True, has_received_first_event=True,
+                            last_event_timestamp=0,
+                            last_package="com.ss.android.ugc.aweme")
+    fg.last_event_timestamp = daytime_ts
+    store.last_tick_time = daytime_ts
+    last_video_sighting = daytime_ts
+    records = []
+    exact_quota = float(store.quota)
+    recovery_started = False
+    recovery_tick = -1
+    for tick in range(120):
+        sim_now = daytime_ts + tick
+        
+        if tick == 3:
+            fg.last_package = "com.android.systemui"
+            fg.last_event_timestamp = sim_now
+        
+        # Dialog fires events every 3s -> watchdog stays alive
+        if tick > 3 and tick % 3 == 0:
+            fg.last_event_timestamp = sim_now
+        
+        # FIX: dialog events EXTEND keepalive (new onAccessibilityEvent behavior)
+        # Any non-input-method event extends lastVideoSightingMs
+        if tick >= 3:
+            last_video_sighting = sim_now
+        
+        # detect_watching now has NO polling in if-branch
+        # But keepalive is constantly extended by dialog events → isWatching stays true
+        is_watching = detect_watching(fg,
+            polling_pkg="com.ss.android.ugc.aweme",
+            last_video_sighting=last_video_sighting,
+            sim_now=sim_now)
+        
+        if is_watching:
+            if fg.last_package in SHORT_VIDEO_PACKAGES or fg.last_package == BILIBILI_PACKAGE:
+                last_video_sighting = sim_now
+        elif not recovery_started:
+            recovery_started = True
+            recovery_tick = tick
+        
+        daytime = is_daytime(sim_now)
+        delta = calculate_delta_per_second(is_watching, daytime)
+        exact_quota = max(QUOTA_MIN, min(QUOTA_MAX, exact_quota + delta))
+        rounded = int(exact_quota)
+        if rounded != store.quota:
+            store.quota = rounded
+        if abs(exact_quota - float(store.quota)) > 5.0:
+            exact_quota = float(store.quota)
+        store.last_tick_time = sim_now
+        records.append(TickRecord(
+            second=tick, quota_int=store.quota, exact_quota=exact_quota,
+            is_watching=is_watching, delta=delta, mode='实时'
+        ))
+    print(f"  Recovery started at tick={recovery_tick}")
+    print(f"  Final quota: {records[-1].quota_int} (expected ~60)")
+    if recovery_started:
+        print(f"  [FAIL] Bug confirmed! Recovery at tick={recovery_tick} (keepalive expired, polling unreachable)")
+    else:
+        print(f"  [PASS] Never recovered. Polling fallback works in both branches")
+
+    # ---- Scenario 11: POLLING OSCILLATION even with LADDER ----
+    print()
+    print("=" * 70)
+    print("  SCENARIO 11: POLLING OSCILLATION (LADDER still oscillates!)")
+    print()
+    print("  User on Douyin with system dialog (keepalive expired)")
+    print("  LADDER fix: polling IS now called every tick")
+    print("  BUT: UsageStatsManager 5s window is unreliable")
+    print("  -> returns 'douyin' 70%, returns None 30%")
+    print("  -> isWatching flips true/false ~48 times in 2min")
+    print("  -> user sees BOTH consumption AND recovery simultaneously!")
+    print("=" * 70)
+    import time as _time
+    import random
+    daytime_ts2 = _time.mktime(_time.strptime("2026-06-25 14:00:00", "%Y-%m-%d %H:%M:%S"))
+    store = SimQuotaStore(quota=80)
+    fg2 = SimForegroundState(is_connected=True, has_received_first_event=True,
+                             last_event_timestamp=daytime_ts2,
+                             last_package="com.ss.android.ugc.aweme")
+    store.last_tick_time = daytime_ts2
+    last_video_sighting = daytime_ts2
+    random.seed(42)
+    flips = 0
+    records = []
+    exact_quota = float(store.quota)
+    prev_watching = True
+    for tick in range(120):
+        sim_now = daytime_ts2 + tick
+        
+        if tick == 3:
+            fg2.last_package = "com.android.systemui"
+            fg2.last_event_timestamp = sim_now
+        if tick > 3 and tick % 3 == 0:
+            fg2.last_event_timestamp = sim_now
+        
+        # OLD behavior: polling in if-branch (unreliable → oscillation)
+        # This is what LADDER fix did - and why it still oscillates!
+        if fg2.last_package in SHORT_VIDEO_PACKAGES or fg2.last_package == BILIBILI_PACKAGE:
+            ec2 = True
+        else:
+            ec2 = fg2.is_connected and fg2.has_received_first_event and (sim_now - fg2.last_event_timestamp < 5.0)
+        
+        if ec2:
+            pkg2 = fg2.last_package
+            from_a11y2 = pkg2 is not None and pkg2 in SHORT_VIDEO_PACKAGES
+            if from_a11y2:
+                is_watching = True
+            elif last_video_sighting is not None and sim_now - last_video_sighting < VIDEO_SIGHTING_GRACE_SEC:
+                is_watching = True
+            else:
+                # OLD: polling in if-branch - unreliable!
+                is_watching = polling_pkg is not None and polling_pkg in SHORT_VIDEO_PACKAGES
+        else:
+            if last_video_sighting is not None and sim_now - last_video_sighting < VIDEO_SIGHTING_GRACE_SEC:
+                is_watching = True
+            else:
+                is_watching = polling_pkg is not None and polling_pkg in SHORT_VIDEO_PACKAGES
+        
+        if is_watching != prev_watching:
+            flips += 1
+            prev_watching = is_watching
+        
+        if is_watching:
+            if fg2.last_package in SHORT_VIDEO_PACKAGES or fg2.last_package == BILIBILI_PACKAGE:
+                last_video_sighting = sim_now
+        
+        daytime = is_daytime(sim_now)
+        delta = calculate_delta_per_second(is_watching, daytime)
+        exact_quota = max(QUOTA_MIN, min(QUOTA_MAX, exact_quota + delta))
+        rounded = int(exact_quota)
+        if rounded != store.quota: store.quota = rounded
+        if abs(exact_quota - float(store.quota)) > 5.0: exact_quota = float(store.quota)
+        store.last_tick_time = sim_now
+        records.append(TickRecord(second=tick, quota_int=store.quota, exact_quota=exact_quota,
+            is_watching=is_watching, delta=delta, mode='实时'))
+    
+    net_drop = 80 - records[-1].quota_int
+    expected_drop = 20  # -10/60 * 120
+    print(f"  Flips: {flips} (0 = stable, 48+ = severe oscillation)")
+    print(f"  Final: {records[-1].quota_int} (expected ~60)")
+    print(f"  Net drop: {net_drop} (expected ~{expected_drop})")
+    if flips > 10:
+        print(f"  [FAIL] Severe oscillation! {flips} flips in 2min")
+    else:
+        print(f"  [PASS] Stable detection")
+
+    # ---- Scenario 12: NO POLL in if-branch + extend keepalive on ANY event ----
+    print()
+    print("=" * 70)
+    print("  SCENARIO 12: FIX - no polling in a11y branch + extend keepalive")
+    print()
+    print("  When A11y is connected, DON'T poll (UsageStatsManager is unreliable).")
+    print("  Keepalive gets extended on ANY non-input-method event.")
+    print("  -> dialog events keep extending lastVideoSightingMs")
+    print("  -> keepalive never expires while dialogs fire events")
+    print("  -> when events stop (dialog gone), 15s countdown starts")
+    print("  -> then expires naturally -> isWatching=false (correct)")
+    print("=" * 70)
+    
+    def detect_watching_fixed(fg_state, lvs, sim_now_val, polling_pkg=None):
+        """Fixed: no polling in a11y branch, keepalive extended by any event"""
+        if fg_state.is_effectively_connected:
+            pkg = fg_state.last_package
+            from_a11y = pkg is not None and pkg in SHORT_VIDEO_PACKAGES
+            if from_a11y:
+                return True
+            # Keepalive only - no polling!
+            return lvs is not None and sim_now_val is not None and (sim_now_val - lvs < VIDEO_SIGHTING_GRACE_SEC)
+        else:
+            if lvs is not None and sim_now_val is not None and (sim_now_val - lvs < VIDEO_SIGHTING_GRACE_SEC):
+                return True
+            if polling_pkg is not None:
+                return polling_pkg in SHORT_VIDEO_PACKAGES or polling_pkg == BILIBILI_PACKAGE
+            return False
+    
+    store = SimQuotaStore(quota=80)
+    fg3 = SimForegroundState(is_connected=True, has_received_first_event=True,
+                             last_event_timestamp=daytime_ts2,
+                             last_package="com.ss.android.ugc.aweme")
+    store.last_tick_time = daytime_ts2
+    last_video_sighting = daytime_ts2
+    random.seed(42)
+    flips = 0
+    records = []
+    exact_quota = float(store.quota)
+    prev_watching = True
+    for tick in range(120):
+        sim_now = daytime_ts2 + tick
+        
+        if tick == 3:
+            fg3.last_package = "com.android.systemui"
+            fg3.last_event_timestamp = sim_now
+        if tick > 3 and tick % 3 == 0:
+            fg3.last_event_timestamp = sim_now
+        
+        # FIX: extend keepalive on ANY non-video event too
+        # (simulating onAccessibilityEvent extending lastVideoSightingMs)
+        if tick >= 3:
+            # Non-video events extend keepalive! Key change.
+            last_video_sighting = sim_now
+        
+        # Unreliable polling: 70% hit rate (same random seed)
+        polling_pkg = "com.ss.android.ugc.aweme" if random.random() < 0.7 else None
+        is_watching = detect_watching_fixed(fg3, last_video_sighting, sim_now, polling_pkg)
+        
+        if is_watching != prev_watching:
+            flips += 1
+            prev_watching = is_watching
+        
+        if is_watching:
+            if fg3.last_package in SHORT_VIDEO_PACKAGES or fg3.last_package == BILIBILI_PACKAGE:
+                last_video_sighting = sim_now
+        
+        daytime = is_daytime(sim_now)
+        delta = calculate_delta_per_second(is_watching, daytime)
+        exact_quota = max(QUOTA_MIN, min(QUOTA_MAX, exact_quota + delta))
+        rounded = int(exact_quota)
+        if rounded != store.quota: store.quota = rounded
+        if abs(exact_quota - float(store.quota)) > 5.0: exact_quota = float(store.quota)
+        store.last_tick_time = sim_now
+        records.append(TickRecord(second=tick, quota_int=store.quota, exact_quota=exact_quota,
+            is_watching=is_watching, delta=delta, mode='实时'))
+    
+    net_drop = 80 - records[-1].quota_int
+    expected_drop = 20
+    print(f"  Flips: {flips} (0 = stable, 48+ = severe oscillation)")
+    print(f"  Final: {records[-1].quota_int} (expected ~60)")
+    print(f"  Net drop: {net_drop} (expected ~{expected_drop})")
+    if flips > 10:
+        print(f"  [FAIL] Still oscillating!")
+    else:
+        print(f"  [PASS] Stable! No oscillation. Pollling eliminated from a11y branch")

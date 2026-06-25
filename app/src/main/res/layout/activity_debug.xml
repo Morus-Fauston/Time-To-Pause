@@ -1,11 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout
+<androidx.core.widget.NestedScrollView
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/background"
-    android:padding="24dp">
+    android:background="@color/background">
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="24dp">
 
     <TextView
         android:id="@+id/tvDebugTitle"
@@ -94,4 +98,87 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-</androidx.constraintlayout.widget.ConstraintLayout>
+    <!-- ========================================================= -->
+    <!-- 诊断日志区域 -->
+    <!-- ========================================================= -->
+
+    <TextView
+        android:id="@+id/tvDiagSectionTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="48dp"
+        android:text="诊 断 日 志"
+        android:textSize="20sp"
+        android:textColor="@color/text_primary"
+        android:textStyle="bold"
+        app:layout_constraintTop_toBottomOf="@id/btnEndGrace"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <TextView
+        android:id="@+id/tvDiagSectionSubtitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="诊断日志仅记录在内存中，可导出为文本文件用于远程排查"
+        android:textSize="13sp"
+        android:textColor="@color/text_secondary"
+        app:layout_constraintTop_toBottomOf="@id/tvDiagSectionTitle"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- 诊断状态 -->
+    <TextView
+        android:id="@+id/tvDiagStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="○ 诊断日志已关闭"
+        android:textSize="15sp"
+        android:textColor="@color/text_secondary"
+        app:layout_constraintTop_toBottomOf="@id/tvDiagSectionSubtitle"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- 记录数 -->
+    <TextView
+        android:id="@+id/tvDiagCount"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text=""
+        android:textSize="13sp"
+        android:textColor="@color/text_secondary"
+        app:layout_constraintTop_toBottomOf="@id/tvDiagStatus"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- 开启/关闭诊断 -->
+    <Button
+        android:id="@+id/btnToggleDiag"
+        android:layout_width="0dp"
+        android:layout_height="48dp"
+        android:layout_marginTop="16dp"
+        android:text="开启诊断日志"
+        android:textSize="15sp"
+        android:backgroundTint="@color/primary"
+        android:textColor="@color/white"
+        app:layout_constraintTop_toBottomOf="@id/tvDiagCount"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- 导出诊断日志 -->
+    <Button
+        android:id="@+id/btnExportDiag"
+        android:layout_width="0dp"
+        android:layout_height="48dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginBottom="32dp"
+        android:text="导出诊断日志"
+        android:textSize="15sp"
+        android:backgroundTint="@color/quota_medium"
+        android:textColor="@color/text_primary"
+        android:enabled="false"
+        app:layout_constraintTop_toBottomOf="@id/btnToggleDiag"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent" />
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+</androidx.core.widget.NestedScrollView>

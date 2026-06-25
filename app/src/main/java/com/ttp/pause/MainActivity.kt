@@ -256,7 +256,7 @@ class MainActivity : AppCompatActivity() {
      * 第零步：无障碍服务（推荐，事件驱动实时检测）
      */
     private fun step0_accessibility() {
-        if (com.ttp.pause.detector.ForegroundMonitorService.isConnected) {
+        if (com.ttp.pause.detector.ForegroundDetector.isConnected) {
             step1_usageStats()
             return
         }

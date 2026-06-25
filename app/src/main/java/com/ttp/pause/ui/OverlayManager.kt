@@ -29,8 +29,6 @@ class OverlayManager(private val context: Context) {
     var onGraceGranted: (() -> Unit)? = null
 
     // ---- 状态追踪 ----
-    private var lastDetectedWatching = false
-    private var lastQuota = Constants.QUOTA_MAX
     private var isOverlayShowing = false
 
     // =========================================================
@@ -38,46 +36,38 @@ class OverlayManager(private val context: Context) {
     // =========================================================
 
     /**
-     * 更新悬浮球状态 + 干预蒙层状态。
-     * 由 QuotaService 每分钟 tick 调用。
+     * 更新悬浮球和蒙层状态。
      *
-     * 悬浮球始终显示（只要 Service 运行），让用户随时看到额度。
-     * 额度变更时悬浮球环形进度条有渐消动画（smooth fade）。
-     *
-     * @param quota 当前额度（0-100）
-     * @param isWatching 当前是否在刷短视频
-     * @param inGracePeriod 是否在宽限期
+     * 两步分离：
+     * 1. OverlayPolicy.evaluate() — 纯函数决策"该显示什么"
+     * 2. applyState() — 将决策应用到 WindowManager
      */
     fun update(
         quota: Int,
         isWatching: Boolean,
         inGracePeriod: Boolean
     ) {
-        // 1. 宽限期间：显示悬浮球，隐藏蒙层
-        if (inGracePeriod) {
+        val state = OverlayPolicy.evaluate(quota, isWatching, inGracePeriod)
+        applyState(state, quota)
+    }
+
+    /** 将 OverlayState 应用到 WindowManager */
+    private fun applyState(state: OverlayState, quota: Int) {
+        if (state.inGracePeriod) {
             hideInterventionOverlay()
             addFloatBall(quota)
             return
         }
 
-        // 2. 追踪状态
-        lastDetectedWatching = isWatching
-        lastQuota = quota
-
-        // 3. 在看短视频 + 额度为 0 → 显示蒙层 + 悬浮球(在蒙层之上)
-        if (isWatching && quota <= Constants.QUOTA_MIN) {
+        if (state.showOverlay) {
             showInterventionOverlay()
-            addFloatBall(quota)
-            return
-        }
-
-        // 4. 在看短视频 + 额度 > 0 → 隐藏蒙层，显示悬浮球
-        if (isWatching && quota > Constants.QUOTA_MIN) {
+        } else {
             hideInterventionOverlay()
         }
 
-        // 5. 始终显示悬浮球（只要 Service 运行）
-        addFloatBall(quota)
+        if (state.showFloatBall) {
+            addFloatBall(quota)
+        }
     }
 
     /** 主动移除悬浮球（Service 销毁时） */
@@ -199,6 +189,9 @@ class OverlayManager(private val context: Context) {
             // SYSTEM_ALERT_WINDOW 权限未开启
         }
     }
+
+    /** 蒙层是否正在显示（供诊断日志查询） */
+    val isInterventionShowing: Boolean get() = isOverlayShowing
 
     /** 隐藏干预蒙层 */
     fun hideInterventionOverlay() {

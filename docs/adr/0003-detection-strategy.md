@@ -2,10 +2,7 @@
 
 ## Status
 
-**Revised — 2026-06-25**。检测方案经过四轮迭代：
-- **v0.1.x**：UsageStatsManager 60 秒轮询（已废弃）
-- **v0.2.0 早期**：UsageStatsManager 10 秒窗口 + Float 累积（中间态，被取代）
-- **v0.2.0（当前）**：**AccessibilityService 事件驱动为主** + UsageStatsManager 5 秒轮询备选
+**Superseded — 2026-06-25**。v0.2.3 起由 ADR-0005（白名单轮询架构）完全替代。ADR-0003 的历史保留供参考。
 
 ## Context
 
