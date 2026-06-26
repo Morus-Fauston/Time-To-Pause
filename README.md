@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/Kotlin-2.0.21-7F52FF?logo=kotlin&logoColor=white" alt="Kotlin"/>
   <img src="https://img.shields.io/badge/minSdk-26-3DDC84?logo=android&logoColor=white" alt="minSdk 26"/>
   <img src="https://img.shields.io/badge/targetSdk-34-3DDC84?logo=android&logoColor=white" alt="targetSdk 34"/>
-  <img src="https://img.shields.io/badge/version-0.2.0.revised.3-FF6B6B" alt="version"/>
+  <img src="https://img.shields.io/badge/version-0.2.7-FF6B6B" alt="version"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-8A2BE2" alt="license"/>
 </p>
 
@@ -42,31 +42,44 @@
 Time-To-Pause/
 ├── app/src/main/java/com/ttp/pause/
 │   ├── MainActivity.kt                    # 欢迎页 + 权限引导 + 仪表盘
-│   ├── Constants.kt                       # 全局常量 & 短视频/Activity 白名单
+│   ├── config/
+│   │   ├── RateConfig.kt                  # 费率与时段配置
+│   │   ├── PackageLists.kt                # 5 种包名白名单
+│   │   └── AppMeta.kt                     # 版本/诊断/通知标识
 │   ├── detector/
-│   │   ├── AppDetector.kt                 # 前台应用检测（包名匹配 + UsageStats 轮询）
-│   │   └── ForegroundMonitorService.kt    # ⭐ AccessibilityService 事件驱动主方案
+│   │   ├── ForegroundDetector.kt          # ⭐ 检测状态机（A11y 优先 + 轮询兜底 + 补偿）
+│   │   ├── ForegroundMonitorService.kt    # AccessibilityService 事件驱动
+│   │   └── AppDetector.kt                 # 包名匹配 + UsageStats 轮询
 │   ├── data/
 │   │   └── QuotaStore.kt                  # 额度持久化（SharedPreferences）
 │   ├── service/
 │   │   ├── QuotaService.kt                # 后台核心引擎（1s tick 循环）
-│   │   └── QuotaEngine.kt                 # 纯计算引擎（零 Android 依赖，可独立测试）
+│   │   ├── QuotaEngine.kt                 # 纯计算引擎（零 Android 依赖，可独立测试）
+│   │   ├── QuotaAccumulator.kt            # Float 精度额度累积器
+│   │   ├── QuotaTickController.kt         # tick 编排控制器（检测→累计→补偿→UI→诊断）
+│   │   └── DiagnosticLogger.kt            # 诊断日志环形缓冲区
 │   ├── ui/
 │   │   ├── FloatBallView.kt               # 悬浮球环形进度条自定义 View
 │   │   ├── QuotaCircleView.kt             # 仪表盘环形指示器
-│   │   ├── OverlayManager.kt              # 悬浮窗统筹管理器
+│   │   ├── OverlayManager.kt              # 悬浮窗统筹管理器（纯渲染）
+│   │   ├── OverlayPolicy.kt               # 蒙层/悬浮球决策纯函数
 │   │   ├── InterventionOverlayView.kt     # 全屏干预蒙层
 │   │   ├── GraceDialogView.kt             # 宽限算术对话框
 │   │   └── DebugActivity.kt               # 调试模式
+│   ├── util/
+│   │   └── Clock.kt                       # 可注入时间接口（RealClock / FakeClock）
 │   └── receiver/
 │       └── BootReceiver.kt                # 开机自启
 ├── docs/
 │   ├── prd.md                             # 产品需求文档（v1.4）
-│   ├── adr/                               # 架构决策记录（4 个）
+│   ├── prd-v0.3.x.md                      # v0.3.x 体验优化 PRD
+│   ├── adr/                               # 架构决策记录（6 个）
 │   │   ├── 0001-service-architecture.md
 │   │   ├── 0002-ui-tech-stack.md
 │   │   ├── 0003-detection-strategy.md
-│   │   └── 0004-overlay-two-layer-architecture.md
+│   │   ├── 0004-overlay-two-layer-architecture.md
+│   │   ├── 0005-whitelist-polling-architecture.md
+│   │   └── 0006-diagnostic-logger.md
 │   └── agents/                            # Agent 文档
 ├── CONTEXT.md                             # 领域术语表（Agent 上下文）
 ├── AGENTS.md                              # Agent 配置与版本规则
@@ -99,24 +112,30 @@ Time-To-Pause/
 ## 检测架构
 
 ```
-AccessibilityService 已连接 + 有有效包名 → ForegroundMonitorService
-  ├── 已知短视频 App (抖音/快手/TikTok/微视) → 直接信任, 无超时
-  ├── B 站 → 信任无超时 + 按 Activity 白名单区分短视频/长视频
-  └── 其他 App / null → 5s watchdog 存活检测
-                      ↓ (watchdog 过期或未连接)
-AppDetector.isWatchingShortVideo() → UsageStatsManager 5s 窗口轮询
-                              ↓ (B 站在轮询模式下全按短视频计)
+ForegroundDetector 四状态机（v0.2.4.revised.5 最终稳定）
+
+A11y 已绑定 + LastPkg=短视频 ──▶ a11yKnowsWatching ──▶ 跳过轮询，直接 WATCHING
+A11y 已绑定 + LastPkg=已知非视频 ──▶ a11yKnowsNotWatching ──▶ 跳过轮询，LEAVING
+其他（A11y 断开 / LastPkg 未知）──▶ 轮询兜底（N=5 确认）
+退出时过度扣除 ──▶ 实时补偿（consumeA11yConfirmTicks）
+
+MIUI 三层适配:
+  exported=true | A11Y_WATCHDOG_MS=60s | SYSTEM_OVERLAY_PACKAGES 含 MIUI 包名
+
+完整检测架构演进见 ADR-0003 和 ADR-0005
 ```
 
 ---
 
 ## 开发路线图
 
-### 🐛 v0.2.x — Bug 修复（当前）
-键盘输入法中断修复 · 蒙层残留修复 · 悬浮球倒计时 · 30 秒防打扰
+### ✅ v0.2.x — Bug 修复（已完成）
+检测架构 L4 稳定（A11y 优先 + 轮询兜底 + 补偿）· 悬浮球倒计时 · 30 秒防打扰
+事件驱动蒙层隐藏 · LEAVING 5s 蒙层抑制 · 宽限时长可调 · 诊断日志系统
+架构重构（Clock 注入 / RateConfig / OverlayPolicy / QuotaTickController 等）
 
-### 🚀 v0.3.x — 体验优化（下一阶段）
-蒙层分两层重构 · 通知栏快捷操作 · QuotaEngine 单元测试 · 远程白名单
+### 🚀 v0.3.x — 体验优化（下一阶段，待确认）
+蒙层分两层重构 · 通知栏快捷操作 · 时段与费率可调节 · 远程白名单
 
 ### 📦 v0.4.x — 可发布版本
 完整 Android 测试框架 · 性能优化 · 隐私合规

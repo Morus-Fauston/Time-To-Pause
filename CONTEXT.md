@@ -27,6 +27,8 @@
 | L2 | v0.2.1 | 四状态机 + 纯逻辑重构 | 代码质量提升，根本矛盾未解 |
 | L3 | v0.2.2~revised.1 | A11y 快路径 + 轮询慢路径 + N=3 | N=3 在 MIUI 上振荡率 12.5% |
 | **L4** | **v0.2.3~v0.2.4.revised.5** | **A11y 优先 + 轮询兜底 + 补偿** | **所有已知场景稳定 ✅** |
+| L4 稳定后修正 | v0.2.5~revised.1 | 包名过滤 + LEAVING 5s 抑制 | 自身 UI 污染 / 蒙层闪烁修复 |
+| **L5 架构重构** | **v0.2.7** | **Clock 注入 / RateConfig / OverlayPolicy 聚合 / QuotaTickController** | **测试可模拟，决策集中，tick 解耦** |
 
 #### 当前核心原则
 - **A11y 优先**：`a11yKnowsWatching` (A11y已绑定 + LastPkg=短视频) → 跳过轮询直接"在看"
@@ -38,6 +40,10 @@
   - 已知非短视频 App 事件 + 当前 WATCHING → 即时 LEAVING
   - **系统弹窗、未知 App → 完全忽略，不影响状态**
 - **方向优先**：宁可多消耗不可错误恢复
+- **自身包名过滤**：`com.ttp.pause` 自身 UI 窗口不污染 `_lastForegroundPackage`，防止检测状态被自身覆盖
+- **事件驱动蒙层隐藏**：切出短视频时 A11y 事件即时隐藏蒙层，0 延迟，不等 LEAVING 5s 窗口
+- **30 秒防打扰 + 循环干预**：关闭蒙层后 30s 内不弹出，超时自动恢复阻遏，无限循环
+- **LEAVING 5s 蒙层抑制**：退出短视频后 5s 内强制不显示蒙层，防止方向优先期间闪烁
 
 #### MIUI 特有适配（完整清单）
 | 适配 | 原因 | 修复版本 |
@@ -48,9 +54,12 @@
 | `POLL_CONFIRMATION_THRESHOLD = 5` | MIUI 上 UsageStats 丢包率 ~50% | revised.2→3 |
 | `a11yKnowsWatching` 用 `_isConnected` | watchdog 到期后 `isEffectivelyConnected=false` 但 A11y 存活 | revised.3→4 |
 | `a11yKnowsNotWatching` + 补偿 | 退出时轮询延迟覆盖 A11y 导致多扣 | revised.5 |
+| `com.ttp.pause` 自身包名过滤 | 自身 UI 窗口覆盖检测状态 | revised.5 后(v0.2.5.revised.1) |
+| `com.miui.screenshot` 白名单 | 截屏浮层不污染 lastForegroundPackage | v0.2.7 |
+| `com.iflytek.inputmethod.miui` 白名单 | 讯飞 MIUI 定制版输入法 | v0.2.6.revised.2 |
 
 ### 后台计时架构
-- **秒级实时模式**：`QuotaService` 内 `Handler.postDelayed(1s)` 的 `secondRunnable`——每秒执行：检测前台 App（优先走 `ForegroundMonitorService` 事件驱动，备选走 `UsageStatsManager` 5 秒窗口）→ 按每秒费率（如 -10/60 ≈ -0.167）累加到 `_exactQuota`（Float）→ 取整持久化 → 驱动 UI 更新
+- **秒级实时模式**：`QuotaService` 内 `Handler.postDelayed(1s)` 驱动 `QuotaTickController`——编排每秒执行链：检测前台 App（`ForegroundDetector`）→ 额度累计（`QuotaAccumulator`）→ 过度扣除补偿 → 持久化 → Overlay UI 更新 → 诊断日志写入。单 `secondRunnable` 仅 3 行委托
 - **追赶动画**：`FloatBallView` 以 166.67 点/秒速度追赶目标值，100 点变化约 0.6 秒完成
 - **旧版分钟模式**：v0.2.0 起已移除（不再支持 60 秒 tick 和 legacyMode）
 
@@ -63,18 +72,22 @@
   - 中央显示 ⏸️ 图标 + "今日额度已用完，Time To Pause。" + "申请宽限"按钮（按钮在单独的按钮层上）
   - 悬浮球在所有层之上，用于触发宽限答题
 - **触发时机**：短视频在前台且额度归零时 → 立即覆盖
+- **事件驱动隐藏**：切出短视频时 A11y 事件即时隐藏蒙层，0 延迟。基于 `ForegroundDetector` 已知非短视频事件回调，不等 LEAVING 5s 窗口
+- **LEAVING 5s 抑制**：退出短视频后 5s 内强制不显示蒙层，防止方向优先期间蒙层闪烁
+- **30 秒防打扰 + 循环干预**：关闭蒙层后 30s 内不弹出，超时后自动恢复阻遏，无限循环
 - **冷却机制**：触发阈值 0，解除阈值 5。触发后额度必须恢复到 5 以上才能解除。冷却期内切出再切入仍继续阻遏，防止低额度反复进出。
 - **非短视频时**：额度为 0 也不显示蒙层，不打扰用户
 - **切回短视频时**：若额度仍为 0，触发蒙层
 - **悬浮球层级**：悬浮球在蒙层之上，确保用户可通过悬浮球触发宽限
-- **关闭**：宽限开始或用户切出短视频 App 时自动隐藏
+- **关闭**：宽限开始 / 事件驱动隐藏 / 用户切出短视频 App 时自动隐藏
 
 ### 悬浮球
 - **显示规则**：
   - Service 运行期间**默认始终显示**（可在设置中关闭：仅在看短视频时显示）
   - 蒙层显示时 → 悬浮球在蒙层之上，可点击触发宽限
+  - 不看短视频时 → 可选隐藏（设置→悬浮球仅看视频显示）
   - 宽限期间 → 切换为倒计时模式（中央数字显示剩余秒数，外圈进度环从 100% 递减）
-- **交互**：可拖动，单击弹出宽限对话框
+- **交互**：可拖动，单击弹出宽限对话框（倒计时模式下不可点击触发新宽限，防止误触）
 
 ### 后台进程恢复
 - **被杀期间处理**：仅按"未在看"回溯恢复（不消耗），加载 `last_tick_time` 模拟恢复至多到 100
@@ -114,7 +127,7 @@
 ### 宽限机制
 - **触发**：悬浮球单击（额度为 0 时），或蒙层"申请宽限"按钮
 - **验证**：百以内加减算术题，答错换题无限重试——目的为制造"停顿反思"而非惩罚
-- **时长**：5 分钟
+- **时长**：5 分钟（可在设置中调节为 3/5/10 分钟）
 - **额度行为**：宽限期间**额度完全冻结**——不消耗（在看也不扣），也不恢复。宽限只是"暂停干预"，不是"回血时间"。
 - **叠加规则**：宽限期间无法叠加或重置
 - **通知**：`ForegroundService` 通知栏显示剩余宽限倒计时
@@ -136,6 +149,8 @@
 | **Bind** | 系统是否绑定服务 | `_isConnected` | `yes` / `no` |
 | A11y | 是否有效连接 | `isEffectivelyConnected` | `yes` / `no` |
 | LastPkg | 最后前台包名 | `lastForegroundPackage` | 包名或 `-` |
+| **GRem** | 宽限剩余秒数 | `graceRemainingSec` | 数字或 `-` |
+| **FBall** | 悬浮球可见性 | `floatBallVisible` | `show` / `hide` |
 
 **诊断模式匹配**：
 - `Bind=no, A11y=no` → 系统从未绑定服务（manifest exported 问题 / OEM 限制）

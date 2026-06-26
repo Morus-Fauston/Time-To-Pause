@@ -76,6 +76,8 @@ private var totalRecorded = 0
 | `a11yBindConnected` | Boolean | 服务是否绑定（v0.2.4.revised 新增） |
 | `a11yConnected` | Boolean | 是否有效连接 |
 | `lastPkg` / `lastActivity` | String? | 最近前台包名/Activity |
+| `graceRemainingSec` | Int | 宽限剩余秒数（v0.2.6.revised.1 新增） |
+| `floatBallVisible` | Boolean | 悬浮球当前可见性（v0.2.6.revised.1 新增） |
 
 **`a11yBindConnected`（Bind 列）的教训**：最初版本没有这个字段，导致第一份日志无法区分"未绑定"和"已绑定无事件"。revised 版本补上后，后续两次分析都能一眼定位。**诊断字段的粒度决定了你能区分多少种故障模式。**
 
@@ -85,6 +87,7 @@ private var totalRecorded = 0
 |:----|:---|:--------------|
 | v0.2.4 | Mode / A11y / LastPkg | 基本 A11y 状态 |
 | v0.2.4.revised | +Bind | 区分"未绑定"和"已绑定无事件" |
+| v0.2.6.revised.1 | +GRem / +FBall | 诊断宽限倒计时状态和悬浮球显隐决策 |
 
 ### 两种输出格式
 
