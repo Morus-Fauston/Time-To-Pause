@@ -3,6 +3,7 @@ package com.ttp.pause.detector
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import com.ttp.pause.Constants
+import com.ttp.pause.config.PackageLists
 
 /**
  * 前台应用检测模块
@@ -38,14 +39,14 @@ class AppDetector(private val context: Context) {
      * 判断指定包名是否为短视频 App
      */
     fun isShortVideoApp(packageName: String): Boolean {
-        return Constants.SHORT_VIDEO_PACKAGES.contains(packageName)
+        return PackageLists.SHORT_VIDEO_PACKAGES.contains(packageName)
     }
 
     /**
      * 判断是否为 B 站
      */
     fun isBilibili(packageName: String): Boolean {
-        return packageName == Constants.BILIBILI_PACKAGE
+        return packageName == PackageLists.BILIBILI_PACKAGE
     }
 
     /**
@@ -55,7 +56,7 @@ class AppDetector(private val context: Context) {
      * 此方法为占位，v1.0 暂不检测 B 站内 Activity 层级。
      */
     fun isBilibiliShortVideoActivity(activityName: String): Boolean {
-        return Constants.BILIBILI_SHORT_VIDEO_ACTIVITIES.contains(activityName)
+        return PackageLists.BILIBILI_SHORT_VIDEO_ACTIVITIES.contains(activityName)
     }
 
     /**

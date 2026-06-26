@@ -64,12 +64,18 @@ class OverlayManager(private val context: Context) {
         graceRemainingSeconds: Long = 0L,
         isShortVideoApp: Boolean = true
     ) {
-        val state = OverlayPolicy.evaluate(quota, isWatching, inGracePeriod)
-        applyState(state, quota, isShortVideoApp, graceRemainingSeconds)
+        val state = OverlayPolicy.evaluate(
+            quota = quota,
+            isWatching = isWatching,
+            inGracePeriod = inGracePeriod,
+            floatBallShowVideoOnly = floatBallShowVideoOnly,
+            isShortVideoApp = isShortVideoApp
+        )
+        applyState(state, quota, graceRemainingSeconds)
     }
 
-    /** 将 OverlayState 应用到 WindowManager */
-    private fun applyState(state: OverlayState, quota: Int, isShortVideoApp: Boolean = true, graceRemainingSeconds: Long = 0L) {
+    /** 将 OverlayState 应用到 WindowManager（纯渲染，无决策逻辑） */
+    private fun applyState(state: OverlayState, quota: Int, graceRemainingSeconds: Long = 0L) {
         if (state.inGracePeriod) {
             hideInterventionOverlay()
             ensureFloatBall(quota)
@@ -78,7 +84,7 @@ class OverlayManager(private val context: Context) {
         }
 
         if (state.showOverlay) {
-            // 检查防打扰冷却期 + LEAVING 抑制期：任一冷却中则不显示蒙层
+            // 检查防打扰冷却期 + LEAVING 抑制期
             val now = System.currentTimeMillis()
             if (now >= dismissCooldownUntil && now >= leavingCooldownUntil) {
                 showInterventionOverlay()
@@ -89,7 +95,8 @@ class OverlayManager(private val context: Context) {
             hideInterventionOverlay()
         }
 
-        if (state.showFloatBall && !(floatBallShowVideoOnly && !isShortVideoApp)) {
+        // 纯渲染：Policy 已经替我们做好了决策
+        if (state.showFloatBall) {
             ensureFloatBall(quota)
             floatBall?.setNormalMode(quota)
         } else {

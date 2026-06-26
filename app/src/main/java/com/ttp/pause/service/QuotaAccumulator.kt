@@ -1,6 +1,7 @@
 package com.ttp.pause.service
 
 import com.ttp.pause.Constants
+import com.ttp.pause.config.RateConfig
 import kotlin.math.abs
 
 /**
@@ -11,15 +12,19 @@ import kotlin.math.abs
  *
  * 调用方（QuotaService）的用法：
  * ```kotlin
- * val result = accumulator.tick(isWatching, isDaytime)
+ * val result = accumulator.tick(isWatching, isDaytime, rateConfig)
  * if (result.quota != currentQuota) {
  *     quotaStore.quota = result.quota
  * }
  * ```
  *
  * @param initialQuota 初始额度（从 SharedPreferences 读取的 Int 值）
+ * @param rateConfig 费率配置（可运行时替换）
  */
-class QuotaAccumulator(initialQuota: Int) {
+class QuotaAccumulator(
+    initialQuota: Int,
+    private val rateConfig: RateConfig = RateConfig.fromConstants()
+) {
 
     private val engine = QuotaEngine()
 
@@ -47,8 +52,8 @@ class QuotaAccumulator(initialQuota: Int) {
      * @param isDaytime 是否白天时段
      * @return TickResult，调用方根据 quota 变化决定是否持久化
      */
-    fun tick(isWatching: Boolean, isDaytime: Boolean): TickResult {
-        val delta = engine.calculateDeltaPerSecond(isWatching, isDaytime)
+    fun tick(isWatching: Boolean, isDaytime: Boolean, rates: RateConfig = this.rateConfig): TickResult {
+        val delta = engine.calculateDeltaPerSecond(isWatching, isDaytime, rates)
         _exactQuota = (_exactQuota + delta)
             .coerceIn(Constants.QUOTA_MIN.toFloat(), Constants.QUOTA_MAX.toFloat())
 

@@ -1,6 +1,9 @@
 package com.ttp.pause.detector
 
 import com.ttp.pause.Constants
+import com.ttp.pause.config.PackageLists
+import com.ttp.pause.util.Clock
+import com.ttp.pause.util.RealClock
 
 /**
  * 前台检测 — 轮询为主、A11y 加速（v0.2.3+）
@@ -35,6 +38,9 @@ import com.ttp.pause.Constants
  * ```
  */
 object ForegroundDetector {
+
+    /** 可替换的时钟实例（测试时可注入模拟时钟） */
+    var clock: Clock = RealClock
 
     enum class State {
         /** 轮询确认或 A11y 瞬态跳转 → 在看 */
@@ -74,7 +80,7 @@ object ForegroundDetector {
     val isEffectivelyConnected: Boolean
         get() {
             if (!_isConnected || !_hasReceivedFirstEvent) return false
-            return System.currentTimeMillis() - _lastEventTimestamp < Constants.A11Y_WATCHDOG_MS
+            return clock.now() - _lastEventTimestamp < Constants.A11Y_WATCHDOG_MS
         }
 
     // =========================================================
@@ -98,21 +104,21 @@ object ForegroundDetector {
      * - 其他所有包名（系统弹窗、未知 App）→ 忽略，只刷新心跳
      */
     fun onAccessibilityEvent(pkg: String?, activity: String?) {
-        val now = System.currentTimeMillis()
+        val now = clock.now()
         _lastEventTimestamp = now
         if (!_hasReceivedFirstEvent) _hasReceivedFirstEvent = true
 
         val isFiltered = pkg == null
-                || pkg in Constants.INPUT_METHOD_PACKAGES
-                || pkg in Constants.SYSTEM_OVERLAY_PACKAGES
+                || pkg in PackageLists.INPUT_METHOD_PACKAGES
+                || pkg in PackageLists.SYSTEM_OVERLAY_PACKAGES
 
         if (!isFiltered) {
             _lastForegroundPackage = pkg
             _lastForegroundActivity = activity
         }
 
-        val isShortVideo = pkg in Constants.SHORT_VIDEO_PACKAGES
-                || pkg == Constants.BILIBILI_PACKAGE
+        val isShortVideo = pkg in PackageLists.SHORT_VIDEO_PACKAGES
+                || pkg == PackageLists.BILIBILI_PACKAGE
 
         if (isShortVideo) {
             _state = State.WATCHING
@@ -122,7 +128,7 @@ object ForegroundDetector {
 
         // 非过滤 + 已知非短视频包名 + 当前 WATCHING → 进入 LEAVING
         if (!isFiltered
-            && pkg in Constants.KNOWN_NON_VIDEO_PACKAGES
+            && pkg in PackageLists.KNOWN_NON_VIDEO_PACKAGES
             && _state == State.WATCHING
         ) {
             _state = State.LEAVING
@@ -204,13 +210,13 @@ object ForegroundDetector {
     private val a11yKnowsNotWatching: Boolean
         get() = _isConnected
                 && _lastForegroundPackage != null
-                && _lastForegroundPackage in Constants.KNOWN_NON_VIDEO_PACKAGES
+                && _lastForegroundPackage in PackageLists.KNOWN_NON_VIDEO_PACKAGES
 
     private val a11yKnowsWatching: Boolean
         get() = _isConnected
                 && _lastForegroundPackage != null
-                && (_lastForegroundPackage in Constants.SHORT_VIDEO_PACKAGES
-                    || _lastForegroundPackage == Constants.BILIBILI_PACKAGE)
+                && (_lastForegroundPackage in PackageLists.SHORT_VIDEO_PACKAGES
+                    || _lastForegroundPackage == PackageLists.BILIBILI_PACKAGE)
 
     // =========================================================
     // 状态处理（A11y 优先，轮询兜底）
@@ -329,5 +335,28 @@ object ForegroundDetector {
             return _pollDirection
         }
         return false
+    }
+
+    // =========================================================
+    // 测试辅助
+    // =========================================================
+
+    /**
+     * 重置所有内部状态（测试隔离用）。
+     *
+     * object 单例跨测试会泄漏状态，每次测试前调用此方法确保隔离。
+     */
+    fun reset() {
+        _state = State.NOT_WATCHING
+        _isConnected = false
+        _hasReceivedFirstEvent = false
+        _lastEventTimestamp = 0L
+        _pollConfirmCount = 0
+        _pollDirection = false
+        _a11yNotWatchingTicks = 0
+        _lastForegroundPackage = null
+        _lastForegroundActivity = null
+        clock = RealClock
+        onKnownNonVideoPackage = null
     }
 }

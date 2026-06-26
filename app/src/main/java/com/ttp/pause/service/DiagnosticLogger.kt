@@ -1,7 +1,7 @@
 package com.ttp.pause.service
 
 import android.util.Log
-import com.ttp.pause.Constants
+import com.ttp.pause.config.AppMeta
 import com.ttp.pause.detector.ForegroundDetector
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -29,10 +29,10 @@ import java.util.Locale
 object DiagnosticLogger {
 
     /** Logcat tag */
-    const val TAG = Constants.DIAG_TAG
+    const val TAG = AppMeta.DIAG_TAG
 
     /** 环形缓冲区大小：1 小时（1 tick/s × 3600s） */
-    const val RING_BUFFER_SIZE = Constants.DIAG_RING_BUFFER_SIZE
+    const val RING_BUFFER_SIZE = AppMeta.DIAG_RING_BUFFER_SIZE
 
     /** 是否开启诊断日志记录（仅调试模式开启） */
     var isEnabled: Boolean = false
@@ -186,7 +186,7 @@ object DiagnosticLogger {
         sb.appendLine("=" .repeat(70))
         sb.appendLine("  Exported : ${dateFormat.format(Date())}")
         sb.appendLine("  Records  : $totalRecorded (ring buffer: $RING_BUFFER_SIZE)")
-        sb.appendLine("  App      : ${Constants.VERSION_NAME}")
+        sb.appendLine("  App      : ${AppMeta.VERSION_NAME}")
         sb.appendLine("=" .repeat(70))
         sb.appendLine()
 

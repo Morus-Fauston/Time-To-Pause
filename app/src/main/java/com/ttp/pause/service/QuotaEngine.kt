@@ -1,6 +1,7 @@
 package com.ttp.pause.service
 
 import com.ttp.pause.Constants
+import com.ttp.pause.config.RateConfig
 import java.util.Calendar
 
 /**
@@ -11,11 +12,15 @@ import java.util.Calendar
  *
  * 测试方式：
  * ```kotlin
- * val engine = QuotaEngine()
+ * val engine = QuotaEngine(RateConfig())
  * engine.calculateDelta(isWatching = true, isDayTime = true)  // → -10
  * ```
+ *
+ * @param rateConfig 费率与时段配置（可运行时替换）
  */
-class QuotaEngine {
+class QuotaEngine(
+    private val rateConfig: RateConfig = RateConfig.fromConstants()
+) {
 
     // =========================================================
     // 消耗/恢复计算（秒级精度）
@@ -30,22 +35,30 @@ class QuotaEngine {
      */
     fun calculateDeltaPerSecond(
         isWatching: Boolean,
-        isDayTime: Boolean
+        isDayTime: Boolean,
+        rates: RateConfig = this.rateConfig
     ): Float {
         return if (isWatching) {
-            -(if (isDayTime) Constants.CONSUME_DAY.toFloat() else Constants.CONSUME_NIGHT.toFloat()) / 60f
+            -(if (isDayTime) rates.consumeDay else rates.consumeNight) / 60f
         } else {
-            (if (isDayTime) Constants.RECOVER_DAY.toFloat() else Constants.RECOVER_NIGHT.toFloat()) / 60f
+            (if (isDayTime) rates.recoverDay else rates.recoverNight) / 60f
         }
     }
 
     /**
-     * 判断给定时间是否为白天（06:00-23:00）
+     * 计算补偿每 tick 的消耗速率（Service 中的硬编码公式移入此处）
+     */
+    fun calculateCompensationPerTick(isDaytime: Boolean, rates: RateConfig = this.rateConfig): Float {
+        return (if (isDaytime) rates.consumeDay else rates.consumeNight) / 60f
+    }
+
+    /**
+     * 判断给定时间是否为白天（使用 RateConfig 中的时段）
      */
     fun isDayTime(time: Long): Boolean {
         val cal = Calendar.getInstance().apply { this.timeInMillis = time }
         val hour = cal.get(Calendar.HOUR_OF_DAY)
-        return hour in Constants.DAY_START_HOUR until Constants.DAY_END_HOUR
+        return hour in rateConfig.dayStartHour until rateConfig.dayEndHour
     }
 
     // =========================================================
@@ -66,14 +79,15 @@ class QuotaEngine {
     fun catchUpRecovery(
         lastTickTime: Long,
         now: Long,
-        maxSeconds: Int = 86400
+        maxSeconds: Int = 86400,
+        rates: RateConfig = this.rateConfig
     ): Int {
         val elapsedSeconds = ((now - lastTickTime) / 1000L).toInt()
             .coerceIn(0, maxSeconds)
         if (elapsedSeconds <= 0) return 0
 
-        val dayRecoveryPerSec = Constants.RECOVER_DAY / 60f   // ~0.083 点/秒
-        val nightRecoveryPerSec = Constants.RECOVER_NIGHT / 60f // = 0.05 点/秒
+        val dayRecoveryPerSec = rates.recoverDay / 60f
+        val nightRecoveryPerSec = rates.recoverNight / 60f
 
         var recovered = 0f
         var currentTime = lastTickTime

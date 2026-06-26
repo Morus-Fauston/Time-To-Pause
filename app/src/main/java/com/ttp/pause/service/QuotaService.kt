@@ -12,6 +12,7 @@ import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.ttp.pause.Constants
 import com.ttp.pause.R
+import com.ttp.pause.config.AppMeta
 import com.ttp.pause.data.QuotaStore
 import com.ttp.pause.detector.AppDetector
 import com.ttp.pause.detector.ForegroundDetector
@@ -47,110 +48,15 @@ class QuotaService : Service() {
     private lateinit var accumulator: QuotaAccumulator
     private lateinit var notificationManager: NotificationManager
     private lateinit var overlayManager: OverlayManager
+    private lateinit var tickController: QuotaTickController
 
     private val handler = Handler(Looper.getMainLooper())
 
-    // ---- 每秒循环 ----
+    // ---- 每秒循环（委托给 QuotaTickController） ----
     private val secondRunnable = object : Runnable {
         override fun run() {
-            val now = System.currentTimeMillis()
-
-            if (quotaStore.isInGracePeriod()) {
-                quotaStore.lastTickTime = now
-                updateNotification()
-                overlayManager.update(
-                    quota = quotaStore.quota,
-                    isWatching = false,
-                    inGracePeriod = true,
-                    graceRemainingSeconds = quotaStore.getGraceRemainingSeconds()
-                )
-
-                // 诊断：宽限期间 tick
-                DiagnosticLogger.record(
-                    state = ForegroundDetector.currentState,
-                    isWatching = false,
-                    exactQuota = accumulator.exactQuota(),
-                    delta = 0f,
-                    persistedQuota = quotaStore.quota,
-                    isDaytime = engine.isDayTime(now),
-                    inGracePeriod = true,
-                    overlayShown = overlayManager.isInterventionShowing,
-                    connectionMode = if (ForegroundDetector.isEffectivelyConnected) "实时" else "轮询",
-                    a11yConnected = ForegroundDetector.isEffectivelyConnected,
-                    a11yBindConnected = ForegroundDetector.isConnected,
-                    lastPkg = ForegroundDetector.lastForegroundPackage,
-                    lastActivity = ForegroundDetector.lastForegroundActivity,
-                    graceRemainingSec = quotaStore.getGraceRemainingSeconds(),
-                    floatBallVisible = overlayManager.isFloatBallShowing()
-                )
-
-                handler.postDelayed(this, 1000L)
-                return
-            }
-
-            // === 前台 App 判定（委托给 ForegroundDetector） ===
-            // 检测逻辑已全部移至 ForegroundDetector，包括：
-            // - AccessibilityService 事件驱动的包名追踪
-            // - 15s keepalive 瞬态覆盖防护
-            // - UsageStatsManager 轮询兜底
-            // - 输入法白名单过滤
-            // - isEffectivelyConnected watchdog
-            //
-            // 一行调用 = 一个真相来源。
-            val isWatching = ForegroundDetector.isCurrentlyWatching(appDetector)
-
-            // === 前台是否为短视频 App（基于 LastPkg，用于悬浮球显隐） ===
-            val lastPkg = ForegroundDetector.lastForegroundPackage
-            val isShortVideoApp = lastPkg in Constants.SHORT_VIDEO_PACKAGES
-                    || lastPkg == Constants.BILIBILI_PACKAGE
-
-            // === 额度累积（委托给 QuotaAccumulator） ===
-            val isDaytime = engine.isDayTime(now)
-            val tickResult = accumulator.tick(isWatching, isDaytime)
-
-            // === 补偿：A11y 确认退出但 LEAVING 未完成期间的过度扣除 ===
-            // 当 A11y（LastPkg=已知非短视频）确认用户已离开时，跳过 polling
-            // 但仍因方向优先返回 true（过度消耗）。补偿将这些 tick 按消耗
-            // 速率加回额度。
-            val a11yTicks = ForegroundDetector.consumeA11yConfirmTicks()
-            if (a11yTicks > 0) {
-                val quotaPerTick = (if (isDaytime) 10f else 16f) / 60f
-                accumulator.compensate(a11yTicks * quotaPerTick)
-            }
-
-            // 取最终取整额度（含补偿）判断是否持久化
-            val finalQuota = accumulator.quota
-            if (finalQuota != quotaStore.quota) {
-                quotaStore.quota = finalQuota
-            }
-            quotaStore.lastTickTime = now
+            tickController.execute()
             updateNotification()
-
-            overlayManager.update(
-                quota = finalQuota,
-                isWatching = isWatching,
-                inGracePeriod = false,
-                isShortVideoApp = isShortVideoApp
-            )
-
-            // === 诊断日志（每个 tick 记录一次） ===
-            DiagnosticLogger.record(
-                state = ForegroundDetector.currentState,
-                isWatching = isWatching,
-                exactQuota = accumulator.exactQuota(),
-                delta = tickResult.delta,
-                persistedQuota = finalQuota,
-                isDaytime = isDaytime,
-                inGracePeriod = false,
-                overlayShown = overlayManager.isInterventionShowing,
-                connectionMode = if (ForegroundDetector.isEffectivelyConnected) "实时" else "轮询",
-                a11yConnected = ForegroundDetector.isEffectivelyConnected,
-                a11yBindConnected = ForegroundDetector.isConnected,
-                lastPkg = ForegroundDetector.lastForegroundPackage,
-                lastActivity = ForegroundDetector.lastForegroundActivity,
-                floatBallVisible = overlayManager.isFloatBallShowing()
-            )
-
             handler.postDelayed(this, 1000L)
         }
     }
@@ -194,8 +100,17 @@ class QuotaService : Service() {
             overlayManager.dismissCooldownUntil = cooldownEnd
         }
 
+        // 初始化 Tick 控制器
+        tickController = QuotaTickController(
+            engine = engine,
+            quotaStore = quotaStore,
+            accumulator = accumulator,
+            overlayManager = overlayManager,
+            appDetector = appDetector
+        )
+
         createNotificationChannel()
-        startForeground(Constants.NOTIFICATION_ID, buildNotification())
+        startForeground(AppMeta.NOTIFICATION_ID, buildNotification())
 
         catchUpRecovery()
         handler.post(secondRunnable)
@@ -282,7 +197,7 @@ class QuotaService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                Constants.NOTIFICATION_CHANNEL_ID,
+                AppMeta.NOTIFICATION_CHANNEL_ID,
                 getString(R.string.service_channel_name),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
@@ -300,7 +215,7 @@ class QuotaService : Service() {
             "额度 ${quotaStore.quota} ($mode)"
         }
 
-        return NotificationCompat.Builder(this, Constants.NOTIFICATION_CHANNEL_ID)
+        return NotificationCompat.Builder(this, AppMeta.NOTIFICATION_CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(quotaText)
             .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
@@ -310,7 +225,7 @@ class QuotaService : Service() {
     }
 
     private fun updateNotification() {
-        notificationManager.notify(Constants.NOTIFICATION_ID, buildNotification())
+        notificationManager.notify(AppMeta.NOTIFICATION_ID, buildNotification())
     }
 
     fun checkAndApplyOverlay() {
