@@ -64,6 +64,12 @@ object Constants {
     /** SharedPreferences key：蒙层最近关闭时间戳 */
     const val KEY_OVERLAY_DISMISS_TIMESTAMP = "overlay_dismiss_timestamp"
 
+    /** SharedPreferences key：仅在看短视频时显示悬浮球 */
+    const val KEY_FLOAT_BALL_SHOW_VIDEO_ONLY = "float_ball_show_video_only"
+
+    /** SharedPreferences key：宽限时长（秒） */
+    const val KEY_GRACE_DURATION_SEC = "grace_duration_sec"
+
     // =========================================================
     // 诊断日志
     // =========================================================
@@ -124,6 +130,7 @@ object Constants {
         "com.google.android.inputmethod.latin",         // Gboard
         "com.sohu.inputmethod.sogou",                   // 搜狗
         "com.iflytek.inputmethod",                      // 讯飞
+        "com.iflytek.inputmethod.miui",                   // 讯飞(MIUI定制版)
         "com.baidu.input",                              // 百度
         "com.huawei.emui.method",                       // 华为
         "com.miui.inputmethod",                         // 小米
@@ -164,6 +171,7 @@ object Constants {
         "com.miui.android.fashiongallery",              // MIUI 杂志锁屏
         "com.miui.securitycenter",                      // MIUI 安全中心弹窗
         "com.miui.voiceassist",                         // MIUI 语音助手
+        "com.miui.screenshot",                          // MIUI 截屏浮层
         // ---- 自身包名（避免覆盖检测状态） ----
         "com.ttp.pause",                                // TTP 自己的 UI 窗口
     )
@@ -209,5 +217,5 @@ object Constants {
     )
 
     /** APK 版本名（用于诊断日志导出头） */
-    const val VERSION_NAME = "0.2.5.revised.1"
+    const val VERSION_NAME = "0.2.6.revised.2"
 }

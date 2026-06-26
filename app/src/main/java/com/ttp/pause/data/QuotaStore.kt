@@ -57,16 +57,12 @@ class QuotaStore(context: Context) {
         return maxOf(0L, remaining)
     }
 
-    /**
-     * 开始宽限
-     */
+    /** 开始宽限（使用自定义时长） */
     fun startGrace() {
-        graceEndTimestamp = System.currentTimeMillis() + Constants.GRACE_DURATION_SEC * 1000
+        graceEndTimestamp = System.currentTimeMillis() + graceDurationSec * 1000
     }
 
-    /**
-     * 结束宽限
-     */
+    /** 结束宽限 */
     fun endGrace() {
         graceEndTimestamp = 0L
     }
@@ -94,4 +90,26 @@ class QuotaStore(context: Context) {
     var overlayDismissTimestamp: Long
         get() = prefs.getLong(Constants.KEY_OVERLAY_DISMISS_TIMESTAMP, 0L)
         set(value) = prefs.edit().putLong(Constants.KEY_OVERLAY_DISMISS_TIMESTAMP, value).apply()
+
+    // =========================================================
+    // 悬浮球设置
+    // =========================================================
+
+    /**
+     * 悬浮球是否仅在看短视频时显示（true=仅看视频时显示，false=始终显示）
+     */
+    var floatBallShowVideoOnly: Boolean
+        get() = prefs.getBoolean(Constants.KEY_FLOAT_BALL_SHOW_VIDEO_ONLY, true)
+        set(value) = prefs.edit().putBoolean(Constants.KEY_FLOAT_BALL_SHOW_VIDEO_ONLY, value).apply()
+
+    // =========================================================
+    // 宽限设置
+    // =========================================================
+
+    /**
+     * 宽限时长（秒），默认 5 分钟
+     */
+    var graceDurationSec: Long
+        get() = prefs.getLong(Constants.KEY_GRACE_DURATION_SEC, Constants.GRACE_DURATION_SEC)
+        set(value) = prefs.edit().putLong(Constants.KEY_GRACE_DURATION_SEC, value).apply()
 }

@@ -202,24 +202,64 @@ class MainActivity : AppCompatActivity() {
 
     /** 显示设置弹窗 */
     private fun showSettingsDialog() {
-        val items = arrayOf("重新引导权限", "调试模式", "关闭应用")
+        val showVideoOnly = quotaStore.floatBallShowVideoOnly
+        val graceMin = (quotaStore.graceDurationSec / 60).toInt()
+        val items = arrayOf(
+            "${if (showVideoOnly) "✓" else " "} 仅在短视频应用中开启",
+            "宽限时长（${graceMin}分钟）",
+            "重新引导权限",
+            "调试模式",
+            "关闭应用"
+        )
         AlertDialog.Builder(this)
             .setTitle("设置")
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> {
+                        val newVal = !quotaStore.floatBallShowVideoOnly
+                        quotaStore.floatBallShowVideoOnly = newVal
+                        QuotaService.currentInstance?.updateFloatBallShowVideoOnly(newVal)
+                        Toast.makeText(
+                            this,
+                            if (newVal) "仅在看视频时显示悬浮球" else "悬浮球始终显示",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    1 -> {
+                        showGraceDurationDialog()
+                    }
+                    2 -> {
                         getSharedPreferences(Constants.PREF_NAME, Context.MODE_PRIVATE)
                             .edit().putBoolean("setup_completed", false).apply()
                         startPermissionGuide()
                     }
-                    1 -> {
+                    3 -> {
                         startActivity(Intent(this, com.ttp.pause.ui.DebugActivity::class.java))
                     }
-                    2 -> {
+                    4 -> {
                         stopService(Intent(this, QuotaService::class.java))
                         finishAffinity()
                     }
                 }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 宽限时长选择弹窗 */
+    private fun showGraceDurationDialog() {
+        val options = arrayOf("3 分钟", "5 分钟", "10 分钟")
+        val values = longArrayOf(180, 300, 600)
+        val currentMin = (quotaStore.graceDurationSec / 60).toInt()
+        val checkedItem = when (currentMin) { 3 -> 0; 10 -> 2; else -> 1 }
+
+        AlertDialog.Builder(this)
+            .setTitle("设置宽限时长")
+            .setSingleChoiceItems(options, checkedItem) { dialog, which ->
+                val sec = values[which]
+                quotaStore.graceDurationSec = sec
+                QuotaService.currentInstance?.updateGraceDurationSec(sec)
+                dialog.dismiss()
             }
             .setNegativeButton("取消", null)
             .show()

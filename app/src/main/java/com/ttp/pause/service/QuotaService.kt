@@ -61,7 +61,8 @@ class QuotaService : Service() {
                 overlayManager.update(
                     quota = quotaStore.quota,
                     isWatching = false,
-                    inGracePeriod = true
+                    inGracePeriod = true,
+                    graceRemainingSeconds = quotaStore.getGraceRemainingSeconds()
                 )
 
                 // 诊断：宽限期间 tick
@@ -78,7 +79,9 @@ class QuotaService : Service() {
                     a11yConnected = ForegroundDetector.isEffectivelyConnected,
                     a11yBindConnected = ForegroundDetector.isConnected,
                     lastPkg = ForegroundDetector.lastForegroundPackage,
-                    lastActivity = ForegroundDetector.lastForegroundActivity
+                    lastActivity = ForegroundDetector.lastForegroundActivity,
+                    graceRemainingSec = quotaStore.getGraceRemainingSeconds(),
+                    floatBallVisible = overlayManager.isFloatBallShowing()
                 )
 
                 handler.postDelayed(this, 1000L)
@@ -95,6 +98,11 @@ class QuotaService : Service() {
             //
             // 一行调用 = 一个真相来源。
             val isWatching = ForegroundDetector.isCurrentlyWatching(appDetector)
+
+            // === 前台是否为短视频 App（基于 LastPkg，用于悬浮球显隐） ===
+            val lastPkg = ForegroundDetector.lastForegroundPackage
+            val isShortVideoApp = lastPkg in Constants.SHORT_VIDEO_PACKAGES
+                    || lastPkg == Constants.BILIBILI_PACKAGE
 
             // === 额度累积（委托给 QuotaAccumulator） ===
             val isDaytime = engine.isDayTime(now)
@@ -121,7 +129,8 @@ class QuotaService : Service() {
             overlayManager.update(
                 quota = finalQuota,
                 isWatching = isWatching,
-                inGracePeriod = false
+                inGracePeriod = false,
+                isShortVideoApp = isShortVideoApp
             )
 
             // === 诊断日志（每个 tick 记录一次） ===
@@ -138,7 +147,8 @@ class QuotaService : Service() {
                 a11yConnected = ForegroundDetector.isEffectivelyConnected,
                 a11yBindConnected = ForegroundDetector.isConnected,
                 lastPkg = ForegroundDetector.lastForegroundPackage,
-                lastActivity = ForegroundDetector.lastForegroundActivity
+                lastActivity = ForegroundDetector.lastForegroundActivity,
+                floatBallVisible = overlayManager.isFloatBallShowing()
             )
 
             handler.postDelayed(this, 1000L)
@@ -174,7 +184,10 @@ class QuotaService : Service() {
         // 恢复蒙层关闭冷却时间戳（Service 重启后持久化）
         overlayManager.dismissCooldownUntil = quotaStore.overlayDismissTimestamp
 
-        // 蒙层关闭时记录防打扰冷却时间戳（30 秒循环干预）
+        // 悬浮球选项 + 宽限时长
+        overlayManager.floatBallShowVideoOnly = quotaStore.floatBallShowVideoOnly
+        overlayManager.graceDurationSec = quotaStore.graceDurationSec
+
         overlayManager.onOverlayDismissed = {
             val cooldownEnd = System.currentTimeMillis() + Constants.OVERLAY_DISMISS_COOLDOWN_MS
             quotaStore.overlayDismissTimestamp = cooldownEnd
@@ -234,6 +247,18 @@ class QuotaService : Service() {
 
     /** 当前诊断日志是否开启 */
     fun isDiagnosticsEnabled(): Boolean = DiagnosticLogger.isEnabled
+
+    /** 运行时更新悬浮球显示策略（由 MainActivity 设置弹窗调用） */
+    fun updateFloatBallShowVideoOnly(enabled: Boolean) {
+        quotaStore.floatBallShowVideoOnly = enabled
+        overlayManager.floatBallShowVideoOnly = enabled
+    }
+
+    /** 运行时更新宽限时长（由 MainActivity 设置弹窗调用） */
+    fun updateGraceDurationSec(sec: Long) {
+        quotaStore.graceDurationSec = sec
+        overlayManager.graceDurationSec = sec
+    }
 
     // =========================================================
     // 回溯恢复

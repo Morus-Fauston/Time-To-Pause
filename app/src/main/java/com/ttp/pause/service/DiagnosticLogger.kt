@@ -74,7 +74,9 @@ object DiagnosticLogger {
         val a11yConnected: Boolean,
         val a11yBindConnected: Boolean,
         val lastPkg: String?,
-        val lastActivity: String?
+        val lastActivity: String?,
+        val graceRemainingSec: Long,
+        val floatBallVisible: Boolean
     )
 
     // =========================================================
@@ -110,7 +112,9 @@ object DiagnosticLogger {
         a11yConnected: Boolean,
         a11yBindConnected: Boolean,
         lastPkg: String?,
-        lastActivity: String?
+        lastActivity: String?,
+        graceRemainingSec: Long = 0L,
+        floatBallVisible: Boolean = false
     ) {
         if (!isEnabled) return
 
@@ -129,7 +133,9 @@ object DiagnosticLogger {
             a11yConnected = a11yConnected,
             a11yBindConnected = a11yBindConnected,
             lastPkg = lastPkg,
-            lastActivity = lastActivity
+            lastActivity = lastActivity,
+            graceRemainingSec = graceRemainingSec,
+            floatBallVisible = floatBallVisible
         )
 
         ringBuffer[writeIndex] = record
@@ -224,6 +230,8 @@ object DiagnosticLogger {
         append("| Mode ")
         append("| Bind ")
         append("| A11y ")
+        append("| GRem")
+        append("| FBall")
         append("| LastPkg")
     }
 
@@ -238,6 +246,8 @@ object DiagnosticLogger {
         append("+---")
         append("+-------")
         append("+-----")
+        append("+------")
+        append("+------")
         append("+------")
         append("+------")
         append("+------")
@@ -264,6 +274,8 @@ object DiagnosticLogger {
             append(" | ${connectionMode.padStart(4)}")
             append(" | ${if (a11yBindConnected) "YES" else "NO "}")
             append(" | ${if (a11yConnected) "CONN" else "DIS "}")
+            append(" | ${graceRemainingSec.toString().padStart(4)}")
+            append(" | ${if (floatBallVisible) " YES" else "  NO"}")
             append(" | ${lastPkg ?: "-"}")
         }
     }
@@ -287,6 +299,8 @@ object DiagnosticLogger {
             append("| ${connectionMode.padEnd(4)} ")
             append("| ${if (a11yBindConnected) "yes" else " no"} ")
             append("| ${if (a11yConnected) "yes" else " no"} ")
+            append("| ${graceRemainingSec.toString().padStart(4)} ")
+            append("| ${if (floatBallVisible) "yes" else " no"} ")
             append("| ${lastPkg ?: "-"}")
         }
     }

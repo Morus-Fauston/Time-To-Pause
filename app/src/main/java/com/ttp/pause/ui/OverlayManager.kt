@@ -37,6 +37,12 @@ class OverlayManager(private val context: Context) {
     /** LEAVING 入口蒙层抑制截止时间戳（进入 LEAVING 后 5s 内不显示蒙层，防闪烁） */
     var leavingCooldownUntil: Long = 0L
 
+    /** 悬浮球是否仅在看短视频时显示，由 QuotaService 设置 */
+    var floatBallShowVideoOnly: Boolean = true
+
+    /** 宽限总时长（秒），由 QuotaService 设置 */
+    var graceDurationSec: Long = Constants.GRACE_DURATION_SEC
+
     // ---- 状态追踪 ----
     private var isOverlayShowing = false
 
@@ -54,17 +60,20 @@ class OverlayManager(private val context: Context) {
     fun update(
         quota: Int,
         isWatching: Boolean,
-        inGracePeriod: Boolean
+        inGracePeriod: Boolean,
+        graceRemainingSeconds: Long = 0L,
+        isShortVideoApp: Boolean = true
     ) {
         val state = OverlayPolicy.evaluate(quota, isWatching, inGracePeriod)
-        applyState(state, quota)
+        applyState(state, quota, isShortVideoApp, graceRemainingSeconds)
     }
 
     /** 将 OverlayState 应用到 WindowManager */
-    private fun applyState(state: OverlayState, quota: Int) {
+    private fun applyState(state: OverlayState, quota: Int, isShortVideoApp: Boolean = true, graceRemainingSeconds: Long = 0L) {
         if (state.inGracePeriod) {
             hideInterventionOverlay()
-            addFloatBall(quota)
+            ensureFloatBall(quota)
+            floatBall?.setCountdownMode(graceRemainingSeconds, graceDurationSec)
             return
         }
 
@@ -80,8 +89,11 @@ class OverlayManager(private val context: Context) {
             hideInterventionOverlay()
         }
 
-        if (state.showFloatBall) {
-            addFloatBall(quota)
+        if (state.showFloatBall && !(floatBallShowVideoOnly && !isShortVideoApp)) {
+            ensureFloatBall(quota)
+            floatBall?.setNormalMode(quota)
+        } else {
+            removeFloatBall()
         }
     }
 
@@ -95,11 +107,9 @@ class OverlayManager(private val context: Context) {
         floatBall = null
     }
 
-    private fun addFloatBall(quota: Int) {
-        if (floatBall != null) {
-            floatBall?.updateQuota(quota)
-            return
-        }
+    /** 确保悬浮球存在（不更新模式，由调用方负责） */
+    private fun ensureFloatBall(quota: Int) {
+        if (floatBall != null) return
 
         val ball = FloatBallView(context)
         val density = context.resources.displayMetrics.density

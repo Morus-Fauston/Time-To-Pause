@@ -44,6 +44,12 @@ class FloatBallView(context: Context) : View(context) {
 
     private var _quota = Constants.QUOTA_MAX
 
+    // ---- 显示模式 ----
+    enum class DisplayMode { NORMAL, COUNTDOWN }
+    private var _displayMode = DisplayMode.NORMAL
+    private var _countdownRemaining = 0f
+    private var _countdownTotal = 300f
+
     // ---- 连续平滑动画 ----
     /** 当前实际显示值（连续浮点，平滑变化） */
     private var _displayValue = Constants.QUOTA_MAX.toFloat()
@@ -104,13 +110,24 @@ class FloatBallView(context: Context) : View(context) {
     // Public API
     // =========================================================
 
-    /** 更新额度目标值。动画会平滑追赶此值（0.6 秒完成大幅变化）。 */
-    fun updateQuota(quota: Int) {
+    /** 正常模式：更新额度目标值。动画会平滑追赶此值（0.6 秒完成大幅变化）。 */
+    fun setNormalMode(quota: Int) {
+        _displayMode = DisplayMode.NORMAL
         _quota = quota.coerceIn(Constants.QUOTA_MIN, Constants.QUOTA_MAX)
+        invalidate()
+    }
+
+    /** 倒计时模式：显示宽限剩余秒数 + 外圈进度环递减 */
+    fun setCountdownMode(remainingSec: Long, totalSec: Long) {
+        _displayMode = DisplayMode.COUNTDOWN
+        _countdownRemaining = remainingSec.toFloat().coerceAtLeast(0f)
+        _countdownTotal = totalSec.toFloat().coerceAtLeast(1f)
+        invalidate()
     }
 
     /** 直接设置额度（无动画，首次显示时用） */
     fun setQuotaImmediate(quota: Int) {
+        _displayMode = DisplayMode.NORMAL
         _quota = quota.coerceIn(Constants.QUOTA_MIN, Constants.QUOTA_MAX)
         _displayValue = _quota.toFloat()
         animStartTime = System.currentTimeMillis()
@@ -119,6 +136,9 @@ class FloatBallView(context: Context) : View(context) {
 
     /** 获取当前额度 */
     fun getQuota(): Int = _quota
+
+    /** 当前是否为倒计时模式 */
+    fun isCountdownMode(): Boolean = _displayMode == DisplayMode.COUNTDOWN
 
     /** 释放动画资源 */
     fun releaseAnimation() {
@@ -178,7 +198,18 @@ class FloatBallView(context: Context) : View(context) {
         // ---- 1. 外阴影 ----
         canvas.drawCircle(cx, cy, outerRadius, shadowPaint)
 
-        // ---- 2. 10 段弧 — 使用 _displayValue（连续浮点数） ----
+        if (_displayMode == DisplayMode.COUNTDOWN) {
+            drawCountdownMode(canvas, cx, cy, outerRadius, innerRadius, ringRect, ringStrokeWidth)
+        } else {
+            drawNormalMode(canvas, cx, cy, outerRadius, innerRadius, ringRect, ringStrokeWidth)
+        }
+    }
+
+    /** 正常模式：10 段弧 + 额度数字 */
+    private fun drawNormalMode(
+        canvas: Canvas, cx: Float, cy: Float, outerRadius: Float,
+        innerRadius: Float, ringRect: RectF, ringStrokeWidth: Float
+    ) {
         segmentBgPaint.strokeWidth = ringStrokeWidth
         segmentFillPaint.strokeWidth = ringStrokeWidth
 
@@ -197,7 +228,6 @@ class FloatBallView(context: Context) : View(context) {
                 segmentBgPaint.alpha = 255
                 canvas.drawArc(ringRect, startAngle, segmentSweepAngle, false, segmentBgPaint)
             } else {
-                // 边缘过渡：先背景段，再叠加部分填充段
                 segmentBgPaint.alpha = 255
                 canvas.drawArc(ringRect, startAngle, segmentSweepAngle, false, segmentBgPaint)
                 segmentFillPaint.color = fillColor
@@ -206,10 +236,10 @@ class FloatBallView(context: Context) : View(context) {
             }
         }
 
-        // ---- 3. 中心圆 ----
+        // 中心圆
         canvas.drawCircle(cx, cy, innerRadius, centerPaint)
 
-        // ---- 4. 中心小圆环装饰 ----
+        // 中心小圆环装饰
         val innerRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             this.strokeWidth = 1.5f
@@ -217,16 +247,61 @@ class FloatBallView(context: Context) : View(context) {
         }
         canvas.drawCircle(cx, cy, innerRadius * 0.85f, innerRingPaint)
 
-        // ---- 5. 数字（居中修正）- 显示连续变化的整数 ----
+        // 额度数字
         val textSize = outerRadius * 0.55f
         textPaint.textSize = textSize
         val fm = textPaint.fontMetrics
         val textBaseline = cy - (fm.ascent + fm.descent) / 2f
         canvas.drawText("${_displayValue.toInt()}", cx, textBaseline, textPaint)
 
-        // ---- 6. 小字 "额度" ----
+        // 小字 "额度"
         smallTextPaint.textSize = outerRadius * 0.18f
         canvas.drawText("额度", cx, cy + outerRadius * 0.50f, smallTextPaint)
+    }
+
+    /** 倒计时模式：连续进度环 + 剩余秒数 + "倒计时" */
+    private fun drawCountdownMode(
+        canvas: Canvas, cx: Float, cy: Float, outerRadius: Float,
+        innerRadius: Float, ringRect: RectF, ringStrokeWidth: Float
+    ) {
+        // 进度环：剩余/总长 → 从 100% 降到 0%
+        val progress = (_countdownRemaining / _countdownTotal).coerceIn(0f, 1f)
+        val sweepAngle = progress * 360f
+
+        // 底色圆环
+        segmentBgPaint.strokeWidth = ringStrokeWidth
+        canvas.drawCircle(cx, cy, ringRect.width() / 2f, segmentBgPaint)
+
+        // 彩色进度弧（使用青色/蓝色渐变）
+        segmentFillPaint.strokeWidth = ringStrokeWidth
+        segmentFillPaint.color = 0xFF5B7FFF.toInt()
+        segmentFillPaint.alpha = 255
+        canvas.drawArc(ringRect, -90f, sweepAngle, false, segmentFillPaint)
+
+        // 中心圆
+        canvas.drawCircle(cx, cy, innerRadius, centerPaint)
+
+        // 中心小圆环装饰
+        val innerRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            this.strokeWidth = 1.5f
+            color = 0x20_000000.toInt()
+        }
+        canvas.drawCircle(cx, cy, innerRadius * 0.85f, innerRingPaint)
+
+        // 剩余秒数（大字）
+        val seconds = _countdownRemaining.toInt().coerceAtLeast(0)
+        val textSize = outerRadius * 0.50f
+        textPaint.textSize = textSize
+        textPaint.color = 0xFF1A1A2E.toInt()
+        val fm = textPaint.fontMetrics
+        val textBaseline = cy - (fm.ascent + fm.descent) / 2f
+        canvas.drawText("$seconds", cx, textBaseline, textPaint)
+
+        // 小字 "倒计时"
+        smallTextPaint.textSize = outerRadius * 0.17f
+        smallTextPaint.color = 0xFF6B7280.toInt()
+        canvas.drawText("倒计时", cx, cy + outerRadius * 0.48f, smallTextPaint)
     }
     // =========================================================
     // 触摸 / 拖动
@@ -272,7 +347,10 @@ class FloatBallView(context: Context) : View(context) {
 
             MotionEvent.ACTION_UP -> {
                 if (!isDragging) {
-                    onGraceRequested?.invoke()
+                    // 倒计时模式禁止触发宽限
+                    if (_displayMode != DisplayMode.COUNTDOWN) {
+                        onGraceRequested?.invoke()
+                    }
                 }
                 return true
             }
