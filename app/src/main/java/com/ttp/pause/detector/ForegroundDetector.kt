@@ -65,6 +65,9 @@ object ForegroundDetector {
     val lastForegroundPackage: String? get() = _lastForegroundPackage
     val lastForegroundActivity: String? get() = _lastForegroundActivity
     val isConnected: Boolean get() = _isConnected
+
+    /** 退出短视频包名时的事件回调（用于即时隐藏蒙层） */
+    var onKnownNonVideoPackage: (() -> Unit)? = null
     val currentState: State get() = _state
 
     /** A11y 是否有效连接（用于通知栏显示"实时"/"轮询"） */
@@ -125,6 +128,7 @@ object ForegroundDetector {
             _state = State.LEAVING
             _pollConfirmCount = 0
             _pollDirection = true
+            onKnownNonVideoPackage?.invoke()
             return
         }
 

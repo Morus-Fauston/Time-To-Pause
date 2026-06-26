@@ -164,6 +164,23 @@ class QuotaService : Service() {
             updateNotification()
         }
 
+        // 事件驱动隐藏：A11y 确认切出时即时隐藏蒙层（不等 LEAVING 窗口）
+        // + LEAVING 入口 5s 蒙层抑制（防方向优先导致闪烁）
+        ForegroundDetector.onKnownNonVideoPackage = {
+            overlayManager.hideInterventionOverlay()
+            overlayManager.leavingCooldownUntil = System.currentTimeMillis() + 5000L
+        }
+
+        // 恢复蒙层关闭冷却时间戳（Service 重启后持久化）
+        overlayManager.dismissCooldownUntil = quotaStore.overlayDismissTimestamp
+
+        // 蒙层关闭时记录防打扰冷却时间戳（30 秒循环干预）
+        overlayManager.onOverlayDismissed = {
+            val cooldownEnd = System.currentTimeMillis() + Constants.OVERLAY_DISMISS_COOLDOWN_MS
+            quotaStore.overlayDismissTimestamp = cooldownEnd
+            overlayManager.dismissCooldownUntil = cooldownEnd
+        }
+
         createNotificationChannel()
         startForeground(Constants.NOTIFICATION_ID, buildNotification())
 

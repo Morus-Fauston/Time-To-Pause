@@ -81,4 +81,17 @@ class QuotaStore(context: Context) {
     var diagEnabled: Boolean
         get() = prefs.getBoolean(Constants.KEY_DIAG_ENABLED, false)
         set(value) = prefs.edit().putBoolean(Constants.KEY_DIAG_ENABLED, value).apply()
+
+    // =========================================================
+    // 蒙层关闭防打扰冷却
+    // =========================================================
+
+    /**
+     * 蒙层最近关闭时间戳（毫秒，含 30s 冷却期）
+     * 在此时间戳之前不显示蒙层（防打扰冷却期）
+     * 值为 0 或过去的时间戳 = 不在冷却期
+     */
+    var overlayDismissTimestamp: Long
+        get() = prefs.getLong(Constants.KEY_OVERLAY_DISMISS_TIMESTAMP, 0L)
+        set(value) = prefs.edit().putLong(Constants.KEY_OVERLAY_DISMISS_TIMESTAMP, value).apply()
 }

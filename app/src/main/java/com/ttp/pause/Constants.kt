@@ -29,6 +29,9 @@ object Constants {
     // 宽限时长
     const val GRACE_DURATION_SEC = 300L // 5 分钟
 
+    /** 蒙层关闭防打扰冷却时长（毫秒） */
+    const val OVERLAY_DISMISS_COOLDOWN_MS = 30_000L
+
     /**
      * 短视频最后可见时刻 Keepalive 宽限期（毫秒）
      *
@@ -57,6 +60,9 @@ object Constants {
     const val KEY_QUOTA = "quota"
     const val KEY_GRACE_END = "grace_end_timestamp"
     const val KEY_LAST_TICK = "last_tick_time"
+
+    /** SharedPreferences key：蒙层最近关闭时间戳 */
+    const val KEY_OVERLAY_DISMISS_TIMESTAMP = "overlay_dismiss_timestamp"
 
     // =========================================================
     // 诊断日志
@@ -158,6 +164,8 @@ object Constants {
         "com.miui.android.fashiongallery",              // MIUI 杂志锁屏
         "com.miui.securitycenter",                      // MIUI 安全中心弹窗
         "com.miui.voiceassist",                         // MIUI 语音助手
+        // ---- 自身包名（避免覆盖检测状态） ----
+        "com.ttp.pause",                                // TTP 自己的 UI 窗口
     )
 
     /**
@@ -201,5 +209,5 @@ object Constants {
     )
 
     /** APK 版本名（用于诊断日志导出头） */
-    const val VERSION_NAME = "0.2.4.revised.5"
+    const val VERSION_NAME = "0.2.5.revised.1"
 }

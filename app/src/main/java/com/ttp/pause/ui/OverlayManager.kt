@@ -28,6 +28,15 @@ class OverlayManager(private val context: Context) {
     /** 宽限验证成功时调用，由 QuotaService 设置 */
     var onGraceGranted: (() -> Unit)? = null
 
+    /** 蒙层关闭时调用（防打扰冷却期用），由 QuotaService 设置 */
+    var onOverlayDismissed: (() -> Unit)? = null
+
+    /** 防打扰冷却截止时间戳，在此之前隐藏蒙层不显示 */
+    var dismissCooldownUntil: Long = 0L
+
+    /** LEAVING 入口蒙层抑制截止时间戳（进入 LEAVING 后 5s 内不显示蒙层，防闪烁） */
+    var leavingCooldownUntil: Long = 0L
+
     // ---- 状态追踪 ----
     private var isOverlayShowing = false
 
@@ -60,7 +69,13 @@ class OverlayManager(private val context: Context) {
         }
 
         if (state.showOverlay) {
-            showInterventionOverlay()
+            // 检查防打扰冷却期 + LEAVING 抑制期：任一冷却中则不显示蒙层
+            val now = System.currentTimeMillis()
+            if (now >= dismissCooldownUntil && now >= leavingCooldownUntil) {
+                showInterventionOverlay()
+            } else {
+                hideInterventionOverlay()
+            }
         } else {
             hideInterventionOverlay()
         }
@@ -179,6 +194,7 @@ class OverlayManager(private val context: Context) {
         // 蒙层上的"返回"按钮 → 关闭蒙层（下次 tick 会重新判断）
         overlay.onDismiss = {
             hideInterventionOverlay()
+            onOverlayDismissed?.invoke()
         }
 
         try {
