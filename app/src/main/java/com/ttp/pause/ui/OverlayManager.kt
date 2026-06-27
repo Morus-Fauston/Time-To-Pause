@@ -22,7 +22,7 @@ class OverlayManager(private val context: Context) {
 
     private var floatBall: FloatBallView? = null
     private var graceDialog: GraceDialogView? = null
-    private var interventionOverlay: InterventionOverlayView? = null
+    private var overlayViews: OverlayViews? = null
 
     // ---- 回传回调 ----
     /** 宽限验证成功时调用，由 QuotaService 设置 */
@@ -42,9 +42,6 @@ class OverlayManager(private val context: Context) {
 
     /** 宽限总时长（秒），由 QuotaService 设置 */
     var graceDurationSec: Long = Constants.GRACE_DURATION_SEC
-
-    // ---- 状态追踪 ----
-    private var isOverlayShowing = false
 
     // =========================================================
     // 悬浮球
@@ -183,60 +180,43 @@ class OverlayManager(private val context: Context) {
     // 干预蒙层
     // =========================================================
 
-    /** 显示干预蒙层 */
+    /** 显示干预蒙层 — 同时添加视觉层（触控穿透）+ 按钮层（可交互） */
     fun showInterventionOverlay() {
-        if (interventionOverlay != null) return
+        if (overlayViews != null) return
 
-        val overlay = InterventionOverlayView(context)
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            android.graphics.PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = 0
-        }
-
-        // 蒙层上的"申请宽限"按钮 → 弹出宽限对话框
-        overlay.onGraceRequested = {
-            showGraceDialog()
-        }
-        // 蒙层上的"返回"按钮 → 关闭蒙层（下次 tick 会重新判断）
-        overlay.onDismiss = {
-            hideInterventionOverlay()
-            onOverlayDismissed?.invoke()
-        }
+        val density = context.resources.displayMetrics.density
+        val views = InterventionOverlayComponents.create(
+            context = context,
+            onGraceRequested = { showGraceDialog() },
+            onDismiss = {
+                hideInterventionOverlay()
+                onOverlayDismissed?.invoke()
+            }
+        )
 
         try {
-            windowManager.addView(overlay, params)
-            interventionOverlay = overlay
-            isOverlayShowing = true
+            windowManager.addView(views.visualLayer, InterventionOverlayComponents.visualLayoutParams())
+            windowManager.addView(views.buttonLayer, InterventionOverlayComponents.buttonLayoutParams(density))
+            overlayViews = views
         } catch (_: SecurityException) {
             // SYSTEM_ALERT_WINDOW 权限未开启
         }
     }
 
     /** 蒙层是否正在显示（供诊断日志查询） */
-    val isInterventionShowing: Boolean get() = isOverlayShowing
+    val isInterventionShowing: Boolean get() = overlayViews != null
 
-    /** 隐藏干预蒙层 */
+    /** 隐藏干预蒙层 — 同时移除视觉层和按钮层 */
     fun hideInterventionOverlay() {
-        interventionOverlay?.let {
-            try { windowManager.removeView(it) } catch (_: Exception) { }
+        overlayViews?.let {
+            try { windowManager.removeView(it.visualLayer) } catch (_: Exception) { }
+            try { windowManager.removeView(it.buttonLayer) } catch (_: Exception) { }
         }
-        interventionOverlay = null
-        isOverlayShowing = false
+        overlayViews = null
     }
 
     /** 蒙层是否正在显示 */
-    fun isOverlayActive(): Boolean = isOverlayShowing
+    fun isOverlayActive(): Boolean = overlayViews != null
 
     // =========================================================
     // 清理
