@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    通知小图标 — 暂停符号（两竖条）。
+    白色单色矢量，适用 24dp 通知图标规范。
+    Android 通知小图标只取 alpha 通道，纯白色确保在所有系统上可见。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- 左竖条 -->
+    <path
+        android:pathData="M6,4h4v16H6z"
+        android:fillColor="#FFFFFF" />
+    <!-- 右竖条 -->
+    <path
+        android:pathData="M14,4h4v16H14z"
+        android:fillColor="#FFFFFF" />
+</vector>

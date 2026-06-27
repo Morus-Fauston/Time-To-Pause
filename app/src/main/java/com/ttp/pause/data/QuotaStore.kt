@@ -112,4 +112,44 @@ class QuotaStore(context: Context) {
     var graceDurationSec: Long
         get() = prefs.getLong(Constants.KEY_GRACE_DURATION_SEC, Constants.GRACE_DURATION_SEC)
         set(value) = prefs.edit().putLong(Constants.KEY_GRACE_DURATION_SEC, value).apply()
+
+    // =========================================================
+    // 暂停服务
+    // =========================================================
+
+    /**
+     * 暂停结束时间戳（毫秒），0 表示未暂停
+     */
+    var pauseEndTimestamp: Long
+        get() = prefs.getLong(Constants.KEY_PAUSE_END_TIMESTAMP, 0L)
+        set(value) = prefs.edit().putLong(Constants.KEY_PAUSE_END_TIMESTAMP, value).apply()
+
+    /**
+     * 暂停时长（秒），默认 10 分钟
+     */
+    var pauseDurationSec: Long
+        get() = prefs.getLong(Constants.KEY_PAUSE_DURATION_SEC, Constants.PAUSE_DURATION_SEC)
+        set(value) = prefs.edit().putLong(Constants.KEY_PAUSE_DURATION_SEC, value).apply()
+
+    /** 是否在暂停中 */
+    fun isPaused(): Boolean {
+        val end = pauseEndTimestamp
+        return end > 0 && System.currentTimeMillis() < end
+    }
+
+    /** 获取暂停剩余秒数 */
+    fun getPauseRemainingSeconds(): Long {
+        val remaining = (pauseEndTimestamp - System.currentTimeMillis()) / 1000
+        return maxOf(0L, remaining)
+    }
+
+    /** 开始暂停（使用自定义时长） */
+    fun startPause() {
+        pauseEndTimestamp = System.currentTimeMillis() + pauseDurationSec * 1000
+    }
+
+    /** 恢复服务（结束暂停） */
+    fun resume() {
+        pauseEndTimestamp = 0L
+    }
 }

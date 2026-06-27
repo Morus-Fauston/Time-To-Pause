@@ -35,6 +35,9 @@ object Constants {
     /** 蒙层关闭防打扰冷却时长（毫秒） */
     const val OVERLAY_DISMISS_COOLDOWN_MS = 30_000L
 
+    // 暂停服务
+    const val PAUSE_DURATION_SEC = 600L // 默认 10 分钟
+
     /** @deprecated v0.2.1+ 被轮询确认机制替代 */
     const val VIDEO_SIGHTING_GRACE_MS = 15_000L
 
@@ -57,4 +60,6 @@ object Constants {
     const val KEY_FLOAT_BALL_SHOW_VIDEO_ONLY = "float_ball_show_video_only"
     const val KEY_GRACE_DURATION_SEC = "grace_duration_sec"
     const val KEY_DIAG_ENABLED = "diag_enabled"
+    const val KEY_PAUSE_END_TIMESTAMP = "pause_end_timestamp"
+    const val KEY_PAUSE_DURATION_SEC = "pause_duration_sec"
 }

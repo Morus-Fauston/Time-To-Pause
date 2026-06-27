@@ -37,6 +37,10 @@ import com.ttp.pause.service.QuotaService
  */
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        private const val REQUEST_NOTIFICATION_PERMISSION = 1001
+    }
+
     private lateinit var progressDemo: ProgressBar
     private lateinit var tvProgressHint: TextView
     private lateinit var btnStart: Button
@@ -359,7 +363,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun step2_overlayPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
-            step3_batteryOptimization()
+            step2_5_notificationPermission()
             return
         }
 
@@ -377,16 +381,67 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "请开启后返回本应用", Toast.LENGTH_LONG).show()
                 handler.postDelayed({
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this))
-                        step3_batteryOptimization()
+                        step2_5_notificationPermission()
                     else Toast.makeText(this, "权限未开启，部分功能不可用", Toast.LENGTH_SHORT).show()
                 }, 3000)
             }
             .setNegativeButton(R.string.perm_skip) { _, _ ->
                 Toast.makeText(this, "权限未开启，部分功能不可用", Toast.LENGTH_SHORT).show()
+                step2_5_notificationPermission()
+            }
+            .setCancelable(false)
+            .show()
+    }
+
+    /**
+     * 第二步半：通知权限（Android 13+ 必须，否则通知栏不可见）
+     */
+    private fun step2_5_notificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            // Android 13 以下不需要通知运行时权限
+            step3_batteryOptimization()
+            return
+        }
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            step3_batteryOptimization()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("通知权限")
+            .setMessage("需要通知权限才能显示后台服务通知栏，用于实时查看额度和快捷操作。")
+            .setPositiveButton("允许") { _, _ ->
+                requestPermissions(
+                    arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                    REQUEST_NOTIFICATION_PERMISSION
+                )
+            }
+            .setNegativeButton("跳过") { _, _ ->
+                Toast.makeText(this, "通知权限未开启，通知栏不可见", Toast.LENGTH_SHORT).show()
                 step3_batteryOptimization()
             }
             .setCancelable(false)
             .show()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_NOTIFICATION_PERMISSION) {
+            if (grantResults.isNotEmpty() &&
+                grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                Toast.makeText(this, "通知权限已开启", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "通知权限未开启，通知栏不可见", Toast.LENGTH_SHORT).show()
+            }
+            step3_batteryOptimization()
+        }
     }
 
     /**

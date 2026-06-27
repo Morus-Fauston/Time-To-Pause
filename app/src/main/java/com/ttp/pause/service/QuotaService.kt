@@ -3,6 +3,7 @@ package com.ttp.pause.service
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.Build
@@ -12,10 +13,12 @@ import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.ttp.pause.Constants
 import com.ttp.pause.R
+import com.ttp.pause.MainActivity
 import com.ttp.pause.config.AppMeta
 import com.ttp.pause.data.QuotaStore
 import com.ttp.pause.detector.AppDetector
 import com.ttp.pause.detector.ForegroundDetector
+import com.ttp.pause.receiver.PauseReceiver
 import com.ttp.pause.service.DiagnosticLogger
 import com.ttp.pause.ui.OverlayManager
 
@@ -199,7 +202,7 @@ class QuotaService : Service() {
             val channel = NotificationChannel(
                 AppMeta.NOTIFICATION_CHANNEL_ID,
                 getString(R.string.service_channel_name),
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 description = getString(R.string.service_channel_desc)
             }
@@ -208,28 +211,101 @@ class QuotaService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val quotaText = if (quotaStore.isInGracePeriod()) {
-            "宽限中 ${engine.graceRemainingSeconds(quotaStore.graceEndTimestamp)}秒"
+        val builder = NotificationCompat.Builder(this, AppMeta.NOTIFICATION_CHANNEL_ID)
+            .setContentTitle(getString(R.string.app_name))
+            .setSmallIcon(R.drawable.ic_notification_pause)
+            .setOngoing(true)
+
+        // 打开仪表盘 Action（三个状态通用）
+        val dashboardIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val dashboardPending = PendingIntent.getActivity(
+            this, 0, dashboardIntent, PendingIntent.FLAG_IMMUTABLE
+        )
+        builder.addAction(android.R.drawable.ic_menu_info_details, "打开仪表盘", dashboardPending)
+
+        if (quotaStore.isPaused()) {
+            // === 暂停态 ===
+            val remaining = quotaStore.getPauseRemainingSeconds()
+            val minutes = remaining / 60
+            val seconds = remaining % 60
+            val pauseText = "已暂停 ${minutes}分${seconds}秒"
+            builder.setContentText(pauseText)
+            // 进度条：暂停倒计时
+            val totalSec = quotaStore.pauseDurationSec
+            val progress = ((totalSec - remaining).toFloat() / totalSec * 100).toInt()
+            builder.setProgress(100, progress, false)
+
+            // 恢复服务 Action
+            val resumeIntent = Intent(this, PauseReceiver::class.java).apply {
+                action = PauseReceiver.ACTION_RESUME
+            }
+            val resumePending = PendingIntent.getBroadcast(
+                this, 1, resumeIntent, PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(android.R.drawable.ic_media_play, "恢复服务", resumePending)
+
+        } else if (quotaStore.isInGracePeriod()) {
+            // === 宽限态 ===
+            val remaining = quotaStore.getGraceRemainingSeconds()
+            val graceText = "宽限中 ${remaining}秒"
+            builder.setContentText(graceText)
+            // 进度条：宽限倒计时
+            val totalSec = overlayManager.graceDurationSec
+            val progress = ((totalSec - remaining).toFloat() / totalSec * 100).toInt()
+            builder.setProgress(100, progress, false)
+
+            // 暂停服务 Action
+            val pauseIntent = Intent(this, PauseReceiver::class.java).apply {
+                action = PauseReceiver.ACTION_PAUSE
+            }
+            val pausePending = PendingIntent.getBroadcast(
+                this, 2, pauseIntent, PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(android.R.drawable.ic_media_pause, "暂停服务", pausePending)
+
         } else {
+            // === 正常态 ===
             val mode = if (ForegroundDetector.isEffectivelyConnected) "实时" else "轮询"
-            "额度 ${quotaStore.quota} ($mode)"
+            val quotaText = "额度 ${quotaStore.quota} ($mode)"
+            builder.setContentText(quotaText)
+            // 进度条：当前额度
+            builder.setProgress(100, quotaStore.quota, false)
+
+            // 暂停服务 Action
+            val pauseIntent = Intent(this, PauseReceiver::class.java).apply {
+                action = PauseReceiver.ACTION_PAUSE
+            }
+            val pausePending = PendingIntent.getBroadcast(
+                this, 3, pauseIntent, PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(android.R.drawable.ic_media_pause, "暂停服务", pausePending)
         }
 
-        return NotificationCompat.Builder(this, AppMeta.NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(getString(R.string.app_name))
-            .setContentText(quotaText)
-            .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+        return builder.build()
     }
 
     private fun updateNotification() {
         notificationManager.notify(AppMeta.NOTIFICATION_ID, buildNotification())
     }
 
+    /** 暂停状态变化时由 PauseReceiver 触发，刷新 UI */
+    fun onPauseStateChanged() {
+        updateNotification()
+        handler.post { checkAndApplyOverlay() }
+    }
+
     fun checkAndApplyOverlay() {
-        if (quotaStore.isInGracePeriod()) {
+        if (quotaStore.isPaused()) {
+            overlayManager.update(
+                quota = quotaStore.quota,
+                isWatching = false,
+                inGracePeriod = false,
+                isShortVideoApp = false,
+                isPaused = true
+            )
+        } else if (quotaStore.isInGracePeriod()) {
             overlayManager.update(
                 quota = quotaStore.quota,
                 isWatching = true,

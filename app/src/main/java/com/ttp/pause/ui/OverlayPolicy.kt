@@ -18,7 +18,8 @@ import com.ttp.pause.Constants
 data class OverlayState(
     val showOverlay: Boolean,
     val showFloatBall: Boolean,
-    val inGracePeriod: Boolean
+    val inGracePeriod: Boolean,
+    val isPaused: Boolean = false
 )
 
 object OverlayPolicy {
@@ -28,8 +29,19 @@ object OverlayPolicy {
         isWatching: Boolean,
         inGracePeriod: Boolean,
         floatBallShowVideoOnly: Boolean = false,
-        isShortVideoApp: Boolean = true
+        isShortVideoApp: Boolean = true,
+        isPaused: Boolean = false
     ): OverlayState {
+        // 暂停期间：隐藏所有 UI（悬浮球和蒙层都不显示）
+        if (isPaused) {
+            return OverlayState(
+                showOverlay = false,
+                showFloatBall = false,
+                inGracePeriod = false,
+                isPaused = true
+            )
+        }
+
         // 宽限期间：仅悬浮球，不显示蒙层
         if (inGracePeriod) {
             return OverlayState(

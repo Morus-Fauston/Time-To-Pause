@@ -59,14 +59,16 @@ class OverlayManager(private val context: Context) {
         isWatching: Boolean,
         inGracePeriod: Boolean,
         graceRemainingSeconds: Long = 0L,
-        isShortVideoApp: Boolean = true
+        isShortVideoApp: Boolean = true,
+        isPaused: Boolean = false
     ) {
         val state = OverlayPolicy.evaluate(
             quota = quota,
             isWatching = isWatching,
             inGracePeriod = inGracePeriod,
             floatBallShowVideoOnly = floatBallShowVideoOnly,
-            isShortVideoApp = isShortVideoApp
+            isShortVideoApp = isShortVideoApp,
+            isPaused = isPaused
         )
         applyState(state, quota, graceRemainingSeconds)
     }

@@ -33,6 +33,35 @@ class QuotaTickController(
             return executeGraceTick(now)
         }
 
+        // 暂停期间：跳过检测/累计/补偿，隐藏所有 UI
+        if (quotaStore.isPaused()) {
+            quotaStore.lastTickTime = now
+            overlayManager.update(
+                quota = quotaStore.quota,
+                isWatching = false,
+                inGracePeriod = false,
+                isShortVideoApp = false,
+                isPaused = true
+            )
+            DiagnosticLogger.record(
+                state = ForegroundDetector.currentState,
+                isWatching = false,
+                exactQuota = accumulator.exactQuota(),
+                delta = 0f,
+                persistedQuota = quotaStore.quota,
+                isDaytime = engine.isDayTime(now),
+                inGracePeriod = false,
+                overlayShown = false,
+                connectionMode = if (ForegroundDetector.isEffectivelyConnected) "实时" else "轮询",
+                a11yConnected = ForegroundDetector.isEffectivelyConnected,
+                a11yBindConnected = ForegroundDetector.isConnected,
+                lastPkg = ForegroundDetector.lastForegroundPackage,
+                lastActivity = ForegroundDetector.lastForegroundActivity,
+                floatBallVisible = false
+            )
+            return quotaStore.quota
+        }
+
         // 检测
         val isWatching = ForegroundDetector.isCurrentlyWatching(appDetector)
         val lastPkg = ForegroundDetector.lastForegroundPackage
