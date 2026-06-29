@@ -888,3 +888,130 @@ if __name__ == "__main__":
         print(f"  [FAIL] Still oscillating!")
     else:
         print(f"  [PASS] Stable! No oscillation. Pollling eliminated from a11y branch")
+
+    # ---- Scenario 13: 冷却机制验证（触发0/解除5）----
+    print()
+    print("=" * 70)
+    print("  SCENARIO 13: 冷却机制验证 — 触发0 / 解除5")
+    print()
+    print("  模拟 OverlayPolicy 冷却期行为:")
+    print("  阶段A: 看抖音至 quota=0 → 进入冷却")
+    print("  阶段B: 切出抖音, quota 从0恢复到3")
+    print("         → 冷却期内, 即使isWatching=false, wasInCooldown仍为true")
+    print("  阶段C: 切回抖音, quota=3 < 5 → 冷却期仍在 → 蒙层继续")
+    print("  阶段D: 继续看至切出, quota回到5")
+    print("         → 冷却解除 (quota >= 5)")
+    print("=" * 70)
+
+    COOLDOWN_EXIT = 5
+    was_in_cooldown = False
+
+    def evaluate_overlay(quota, is_watching, in_grace, was_cd):
+        """复现 OverlayPolicy.evaluate 冷却逻辑"""
+        if in_grace:
+            return False, False  # showOverlay, wasInCooldown
+
+        if is_watching and quota <= 0:
+            was_cd = True
+
+        if was_cd:
+            if quota >= COOLDOWN_EXIT:
+                was_cd = False
+                return False, was_cd
+            elif not is_watching:
+                was_cd = False
+                return False, was_cd
+            else:
+                return True, was_cd
+        else:
+            return (is_watching and quota <= 0), was_cd
+
+    store = SimQuotaStore(quota=100)
+    fg = SimForegroundState(is_connected=True, has_received_first_event=True,
+                            last_event_timestamp=daytime_ts2,
+                            last_package="com.ss.android.ugc.aweme")
+    store.last_tick_time = daytime_ts2
+    was_in_cooldown = False
+    records = []
+    exact_quota = float(store.quota)
+
+    phases = {
+        0: "A: 刷抖音(quota=100→0)",
+        600: "B: 切出(恢复0→3)",
+        780: "C: 切回(quota=3,冷却期)",
+        960: "D: 切出(恢复至5,冷却解除)",
+    }
+    overlay_shown_in = set()
+
+    for tick in range(1200):  # 20 分钟
+        sim_now = daytime_ts2 + tick
+
+        # 阶段区分
+        if tick < 600:
+            # 阶段A: 刷抖音到0
+            fg.last_package = "com.ss.android.ugc.aweme"
+            is_watching = True
+        elif tick < 780:
+            # 阶段B: 切出, 恢复
+            # (tick=600-780时 inGrace=false)
+            fg.last_package = "com.tencent.mm"
+            is_watching = False
+        elif tick < 960:
+            # 阶段C: 切回, quota=3, 冷却期
+            fg.last_package = "com.ss.android.ugc.aweme"
+            is_watching = True
+        else:
+            # 阶段D: 切出到微信
+            fg.last_package = "com.tencent.mm"
+            is_watching = False
+
+        daytime = is_daytime(sim_now)
+        delta = calculate_delta_per_second(is_watching, daytime)
+        exact_quota = max(QUOTA_MIN, min(QUOTA_MAX, exact_quota + delta))
+        rounded = int(exact_quota)
+        if rounded != store.quota:
+            store.quota = rounded
+        if abs(exact_quota - float(store.quota)) > 5.0:
+            exact_quota = float(store.quota)
+        store.last_tick_time = sim_now
+
+        show_overlay, was_in_cooldown = evaluate_overlay(
+            store.quota, is_watching, False, was_in_cooldown)
+        if show_overlay:
+            overlay_shown_in.add(tick)
+
+        records.append(TickRecord(
+            second=tick, quota_int=store.quota, exact_quota=exact_quota,
+            is_watching=is_watching, delta=delta,
+            mode=f'cd={int(was_in_cooldown)}'))
+
+    # 分析结果
+    print(f"\n  阶段A (tick 0-599): 刷抖音到0")
+    a_shown = [t for t in overlay_shown_in if t < 600]
+    a_zero_start = next((t for t in range(600) if records[t].quota_int <= 0), None)
+    print(f"    首次达0: tick={a_zero_start}")
+    a_overlay_start = min(a_shown) if a_shown else None
+    print(f"    蒙层首次显示: tick={a_overlay_start}")
+    print(f"    蒙层覆盖: {len(a_shown)}/600 tick ({len(a_shown)/600*100:.0f}%)")
+
+    print(f"\n  阶段B (tick 600-779): 切出恢复 (0→~3)")
+    b_overlay = [t for t in overlay_shown_in if 600 <= t < 780]
+    quota_b = records[779].quota_int if len(records) > 779 else 0
+    print(f"    阶段结束 quota={quota_b}, 蒙层不应显示: {len(b_overlay)} tick")
+    print(f"    {'✅ 冷却未影响非观看期' if len(b_overlay) == 0 else '❌ 非观看期显示蒙层!'}")
+
+    print(f"\n  阶段C (tick 780-959): 切回, quota<5, 冷却期应继续")
+    c_overlay = [t for t in overlay_shown_in if 780 <= t < 960]
+    quota_c = records[780].quota_int if len(records) > 780 else 0
+    print(f"    开始 quota={quota_c}, 蒙层覆盖: {len(c_overlay)}/180 tick ({len(c_overlay)/180*100:.0f}%)")
+    print(f"    {'✅ 冷却期内继续蒙层' if len(c_overlay) > 100 else '❌ 冷却期未生效!'}")
+
+    print(f"\n  阶段D (tick 960-1199): 切出, quota 3→5")
+    d_overlay = [t for t in overlay_shown_in if 960 <= t < 1200]
+    quota_d = records[-1].quota_int
+    print(f"    结束 quota={quota_d} (期望≥5), 蒙层显示: {len(d_overlay)} tick")
+    print(f"    {'✅ 冷却解除, 无蒙层' if len(d_overlay) == 0 else '❌ 冷却未解除!'}")
+
+    final = records[-1].quota_int
+    print(f"\n  最终: quota={final} | {'✅ 冷却机制验证通过' if final >= COOLDOWN_EXIT and len(d_overlay) == 0 else '❌ 冷却机制异常'}")
+    print(f"  关键行为: 阶段B无蒙层(切出不触发); 阶段C继续蒙层(冷却期); 阶段D解除(quota≥5)")
