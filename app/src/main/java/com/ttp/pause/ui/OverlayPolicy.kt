@@ -30,13 +30,14 @@ object OverlayPolicy {
         inGracePeriod: Boolean,
         floatBallShowVideoOnly: Boolean = false,
         isShortVideoApp: Boolean = true,
-        isPaused: Boolean = false
+        isPaused: Boolean = false,
+        pauseShowFloatBall: Boolean = false
     ): OverlayState {
-        // 暂停期间：隐藏所有 UI（悬浮球和蒙层都不显示）
+        // 暂停期间：蒙层隐藏，悬浮球受 pauseShowFloatBall + floatBallShowVideoOnly 双重控制
         if (isPaused) {
             return OverlayState(
                 showOverlay = false,
-                showFloatBall = false,
+                showFloatBall = pauseShowFloatBall && !(floatBallShowVideoOnly && !isShortVideoApp),
                 inGracePeriod = false,
                 isPaused = true
             )

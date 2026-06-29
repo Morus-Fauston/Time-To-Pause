@@ -152,4 +152,88 @@ class QuotaStore(context: Context) {
     fun resume() {
         pauseEndTimestamp = 0L
     }
+
+    // =========================================================
+    // 费率设置
+    // =========================================================
+
+    var dayStartHour: Float
+        get() {
+            // 兼容旧版 Int 存储 → 迁移到 Float
+            if (prefs.contains(Constants.KEY_DAY_START_HOUR)) {
+                try {
+                    @Suppress("DEPRECATION")
+                    val old = prefs.getInt(Constants.KEY_DAY_START_HOUR, 0)
+                    prefs.edit().remove(Constants.KEY_DAY_START_HOUR)
+                        .putFloat(Constants.KEY_DAY_START_HOUR, old.toFloat()).apply()
+                    return old.toFloat()
+                } catch (_: ClassCastException) {
+                    // 已经是 Float，无需迁移
+                }
+            }
+            return prefs.getFloat(Constants.KEY_DAY_START_HOUR, Constants.DEFAULT_DAY_START_HOUR)
+        }
+        set(value) = prefs.edit().putFloat(Constants.KEY_DAY_START_HOUR, value).apply()
+
+    var dayEndHour: Float
+        get() {
+            if (prefs.contains(Constants.KEY_DAY_END_HOUR)) {
+                try {
+                    @Suppress("DEPRECATION")
+                    val old = prefs.getInt(Constants.KEY_DAY_END_HOUR, 0)
+                    prefs.edit().remove(Constants.KEY_DAY_END_HOUR)
+                        .putFloat(Constants.KEY_DAY_END_HOUR, old.toFloat()).apply()
+                    return old.toFloat()
+                } catch (_: ClassCastException) {
+                    // 已经是 Float，无需迁移
+                }
+            }
+            return prefs.getFloat(Constants.KEY_DAY_END_HOUR, Constants.DEFAULT_DAY_END_HOUR)
+        }
+        set(value) = prefs.edit().putFloat(Constants.KEY_DAY_END_HOUR, value).apply()
+
+    var consumeDay: Int
+        get() = prefs.getInt(Constants.KEY_CONSUME_DAY, Constants.DEFAULT_CONSUME_DAY)
+        set(value) = prefs.edit().putInt(Constants.KEY_CONSUME_DAY, value).apply()
+
+    var consumeNight: Int
+        get() = prefs.getInt(Constants.KEY_CONSUME_NIGHT, Constants.DEFAULT_CONSUME_NIGHT)
+        set(value) = prefs.edit().putInt(Constants.KEY_CONSUME_NIGHT, value).apply()
+
+    var recoverDay: Int
+        get() = prefs.getInt(Constants.KEY_RECOVER_DAY, Constants.DEFAULT_RECOVER_DAY)
+        set(value) = prefs.edit().putInt(Constants.KEY_RECOVER_DAY, value).apply()
+
+    var recoverNight: Int
+        get() = prefs.getInt(Constants.KEY_RECOVER_NIGHT, Constants.DEFAULT_RECOVER_NIGHT)
+        set(value) = prefs.edit().putInt(Constants.KEY_RECOVER_NIGHT, value).apply()
+
+    // =========================================================
+    // 悬浮球设置
+    // =========================================================
+
+    /** 暂停期间是否显示悬浮球 */
+    var pauseShowFloatBall: Boolean
+        get() = prefs.getBoolean(Constants.KEY_PAUSE_SHOW_FLOAT_BALL, false)
+        set(value) = prefs.edit().putBoolean(Constants.KEY_PAUSE_SHOW_FLOAT_BALL, value).apply()
+
+    /** 通知栏显示是否开启 */
+    var notificationEnabled: Boolean
+        get() = prefs.getBoolean(Constants.KEY_NOTIFICATION_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(Constants.KEY_NOTIFICATION_ENABLED, value).apply()
+
+    /** 恢复所有设置为出厂默认值 */
+    fun resetAllToDefaults() {
+        val editor = prefs.edit()
+        editor.remove(Constants.KEY_DAY_START_HOUR)
+            .remove(Constants.KEY_DAY_END_HOUR)
+            .remove(Constants.KEY_CONSUME_DAY)
+            .remove(Constants.KEY_CONSUME_NIGHT)
+            .remove(Constants.KEY_RECOVER_DAY)
+            .remove(Constants.KEY_RECOVER_NIGHT)
+            .remove(Constants.KEY_PAUSE_SHOW_FLOAT_BALL)
+            .remove(Constants.KEY_GRACE_DURATION_SEC)
+            .remove(Constants.KEY_FLOAT_BALL_SHOW_VIDEO_ONLY)
+            .apply()
+    }
 }

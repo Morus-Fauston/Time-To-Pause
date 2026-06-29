@@ -1,5 +1,8 @@
 package com.ttp.pause.config
 
+import com.ttp.pause.Constants
+import com.ttp.pause.data.QuotaStore
+
 /**
  * 费率与时段配置（可运行时调节）
  *
@@ -11,18 +14,28 @@ data class RateConfig(
     val consumeNight: Float = 16f,
     val recoverDay: Float = 5f,
     val recoverNight: Float = 3f,
-    val dayStartHour: Int = 6,
-    val dayEndHour: Int = 23
+    val dayStartHour: Float = 6f,
+    val dayEndHour: Float = 24f
 ) {
     companion object {
         /** 从 Constants 构建默认配置 */
         fun fromConstants() = RateConfig(
-            consumeDay = com.ttp.pause.Constants.CONSUME_DAY.toFloat(),
-            consumeNight = com.ttp.pause.Constants.CONSUME_NIGHT.toFloat(),
-            recoverDay = com.ttp.pause.Constants.RECOVER_DAY.toFloat(),
-            recoverNight = com.ttp.pause.Constants.RECOVER_NIGHT.toFloat(),
-            dayStartHour = com.ttp.pause.Constants.DAY_START_HOUR,
-            dayEndHour = com.ttp.pause.Constants.DAY_END_HOUR
+            consumeDay = Constants.CONSUME_DAY.toFloat(),
+            consumeNight = Constants.CONSUME_NIGHT.toFloat(),
+            recoverDay = Constants.RECOVER_DAY.toFloat(),
+            recoverNight = Constants.RECOVER_NIGHT.toFloat(),
+            dayStartHour = Constants.DAY_START_HOUR,
+            dayEndHour = Constants.DAY_END_HOUR
+        )
+
+        /** 从 SharedPreferences 读取运行时配置 */
+        fun fromStore(store: QuotaStore): RateConfig = RateConfig(
+            consumeDay = store.consumeDay.toFloat(),
+            consumeNight = store.consumeNight.toFloat(),
+            recoverDay = store.recoverDay.toFloat(),
+            recoverNight = store.recoverNight.toFloat(),
+            dayStartHour = store.dayStartHour,
+            dayEndHour = store.dayEndHour
         )
     }
 }

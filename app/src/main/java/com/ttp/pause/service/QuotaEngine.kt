@@ -55,10 +55,12 @@ class QuotaEngine(
     /**
      * 判断给定时间是否为白天（使用 RateConfig 中的时段）
      */
-    fun isDayTime(time: Long): Boolean {
+    fun isDayTime(time: Long, rates: RateConfig = this.rateConfig): Boolean {
         val cal = Calendar.getInstance().apply { this.timeInMillis = time }
-        val hour = cal.get(Calendar.HOUR_OF_DAY)
-        return hour in rateConfig.dayStartHour until rateConfig.dayEndHour
+        val minuteOfDay = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+        val startMinute = (rates.dayStartHour * 60).toInt()
+        val endMinute = (rates.dayEndHour * 60).toInt()
+        return minuteOfDay in startMinute until endMinute
     }
 
     // =========================================================
@@ -94,7 +96,7 @@ class QuotaEngine(
 
         for (i in 0 until elapsedSeconds) {
             currentTime += 1000L
-            recovered += if (isDayTime(currentTime)) dayRecoveryPerSec else nightRecoveryPerSec
+            recovered += if (isDayTime(currentTime, rates)) dayRecoveryPerSec else nightRecoveryPerSec
         }
         return recovered.toInt()
     }

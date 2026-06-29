@@ -12,7 +12,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "0.3.1.revised.2"
+        versionName = "0.3.2.revised.3"
     }
 
     buildTypes {
@@ -54,4 +54,5 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.lifecycle:lifecycle-service:2.7.0")
+    implementation("com.google.android.material:material:1.11.0")
 }

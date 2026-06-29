@@ -14,8 +14,8 @@ object Constants {
     const val QUOTA_MIN = 0
 
     // 白天 06:00-23:00（供 RateConfig 默认值使用）
-    const val DAY_START_HOUR = 6
-    const val DAY_END_HOUR = 23
+    const val DAY_START_HOUR = 6f
+    const val DAY_END_HOUR = 23f
 
     // 消耗/恢复速率（点/分钟，供 RateConfig 默认值使用）
     const val CONSUME_DAY = 10
@@ -62,4 +62,24 @@ object Constants {
     const val KEY_DIAG_ENABLED = "diag_enabled"
     const val KEY_PAUSE_END_TIMESTAMP = "pause_end_timestamp"
     const val KEY_PAUSE_DURATION_SEC = "pause_duration_sec"
+
+    // 时段与费率设置
+    const val KEY_DAY_START_HOUR = "day_start_hour"
+    const val KEY_DAY_END_HOUR = "day_end_hour"
+    const val KEY_CONSUME_DAY = "consume_day"
+    const val KEY_CONSUME_NIGHT = "consume_night"
+    const val KEY_RECOVER_DAY = "recover_day"
+    const val KEY_RECOVER_NIGHT = "recover_night"
+
+    // 悬浮球设置
+    const val KEY_PAUSE_SHOW_FLOAT_BALL = "pause_show_float_ball"
+    const val KEY_NOTIFICATION_ENABLED = "notification_enabled"
+
+    /** 费率默认值（int，点/分钟） */
+    const val DEFAULT_CONSUME_DAY = 10
+    const val DEFAULT_CONSUME_NIGHT = 16
+    const val DEFAULT_RECOVER_DAY = 5
+    const val DEFAULT_RECOVER_NIGHT = 3
+    const val DEFAULT_DAY_START_HOUR = 6f
+    const val DEFAULT_DAY_END_HOUR = 24f
 }

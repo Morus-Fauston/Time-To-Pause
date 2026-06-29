@@ -127,6 +127,25 @@ class DebugActivity : AppCompatActivity() {
             exportDiagLauncher.launch("TTP_diagnostic_$timestamp.txt")
         }
 
+        // 查看设置崩溃日志
+        findViewById<Button>(R.id.btnViewSettingsCrash).setOnClickListener {
+            val crashFile = java.io.File(filesDir, "settings_crash.txt")
+            if (!crashFile.exists()) {
+                Toast.makeText(this, "没有设置崩溃日志", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val text = crashFile.readText()
+            android.app.AlertDialog.Builder(this)
+                .setTitle("设置崩溃日志")
+                .setMessage(text)
+                .setPositiveButton("关闭", null)
+                .setNegativeButton("删除日志") { _, _ ->
+                    crashFile.delete()
+                    Toast.makeText(this, "已删除", Toast.LENGTH_SHORT).show()
+                }
+                .show()
+        }
+
         // 宽限状态
         updateGraceStatus()
         btnEndGrace.setOnClickListener {

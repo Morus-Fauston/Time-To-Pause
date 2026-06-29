@@ -2,12 +2,14 @@ package com.ttp.pause.service
 
 import com.ttp.pause.Constants
 import com.ttp.pause.config.PackageLists
+import com.ttp.pause.config.RateConfig
 import com.ttp.pause.data.QuotaStore
 import com.ttp.pause.detector.AppDetector
 import com.ttp.pause.detector.ForegroundDetector
 import com.ttp.pause.ui.OverlayManager
 import com.ttp.pause.util.Clock
 import com.ttp.pause.util.RealClock
+import java.util.Calendar
 
 /**
  * 单次秒级 tick 的编排控制器。
@@ -33,15 +35,22 @@ class QuotaTickController(
             return executeGraceTick(now)
         }
 
-        // 暂停期间：跳过检测/累计/补偿，隐藏所有 UI
+        // 暂停期间：跳过检测/累计/补偿，UI 由 pauseShowFloatBall 控制
         if (quotaStore.isPaused()) {
             quotaStore.lastTickTime = now
+            val remainingSec = quotaStore.getPauseRemainingSeconds()
+            val pDurationSec = quotaStore.pauseDurationSec
+            val lastPkg = ForegroundDetector.lastForegroundPackage
+            val isShortVideoApp = lastPkg in PackageLists.SHORT_VIDEO_PACKAGES
+                    || lastPkg == PackageLists.BILIBILI_PACKAGE
             overlayManager.update(
-                quota = quotaStore.quota,
+                quota = remainingSec.toInt(),
                 isWatching = false,
                 inGracePeriod = false,
-                isShortVideoApp = false,
-                isPaused = true
+                isShortVideoApp = isShortVideoApp,
+                isPaused = true,
+                pauseRemainingSeconds = remainingSec,
+                pauseDurationSec = pDurationSec
             )
             DiagnosticLogger.record(
                 state = ForegroundDetector.currentState,
@@ -57,7 +66,7 @@ class QuotaTickController(
                 a11yBindConnected = ForegroundDetector.isConnected,
                 lastPkg = ForegroundDetector.lastForegroundPackage,
                 lastActivity = ForegroundDetector.lastForegroundActivity,
-                floatBallVisible = false
+                floatBallVisible = overlayManager.isFloatBallShowing()
             )
             return quotaStore.quota
         }
@@ -68,14 +77,21 @@ class QuotaTickController(
         val isShortVideoApp = lastPkg in PackageLists.SHORT_VIDEO_PACKAGES
                 || lastPkg == PackageLists.BILIBILI_PACKAGE
 
+        // 从持久化读取运行时费率
+        val rates = RateConfig.fromStore(quotaStore)
+        val cal = Calendar.getInstance().apply { this.timeInMillis = now }
+        val minuteOfDay = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+        val startMinute = (rates.dayStartHour * 60).toInt()
+        val endMinute = (rates.dayEndHour * 60).toInt()
+        val isDaytime = minuteOfDay in startMinute until endMinute
+
         // 累计
-        val isDaytime = engine.isDayTime(now)
-        val tickResult = accumulator.tick(isWatching, isDaytime)
+        val tickResult = accumulator.tick(isWatching, isDaytime, rates)
 
         // 补偿：A11y 确认退出但 LEAVING 未完成期间的过度扣除
         val a11yTicks = ForegroundDetector.consumeA11yConfirmTicks()
         if (a11yTicks > 0) {
-            val quotaPerTick = engine.calculateCompensationPerTick(isDaytime)
+            val quotaPerTick = engine.calculateCompensationPerTick(isDaytime, rates)
             accumulator.compensate(a11yTicks * quotaPerTick)
         }
 

@@ -15,6 +15,7 @@ import com.ttp.pause.Constants
 import com.ttp.pause.R
 import com.ttp.pause.MainActivity
 import com.ttp.pause.config.AppMeta
+import com.ttp.pause.config.RateConfig
 import com.ttp.pause.data.QuotaStore
 import com.ttp.pause.detector.AppDetector
 import com.ttp.pause.detector.ForegroundDetector
@@ -59,7 +60,10 @@ class QuotaService : Service() {
     private val secondRunnable = object : Runnable {
         override fun run() {
             tickController.execute()
-            updateNotification()
+            // 通知关闭时跳过，避免每 tick stopForeground 造成闪烁
+            if (quotaStore.notificationEnabled) {
+                updateNotification()
+            }
             handler.postDelayed(this, 1000L)
         }
     }
@@ -95,6 +99,7 @@ class QuotaService : Service() {
 
         // 悬浮球选项 + 宽限时长
         overlayManager.floatBallShowVideoOnly = quotaStore.floatBallShowVideoOnly
+        overlayManager.floatBallPauseShow = quotaStore.pauseShowFloatBall
         overlayManager.graceDurationSec = quotaStore.graceDurationSec
 
         overlayManager.onOverlayDismissed = {
@@ -114,6 +119,15 @@ class QuotaService : Service() {
 
         createNotificationChannel()
         startForeground(AppMeta.NOTIFICATION_ID, buildNotification())
+        if (!quotaStore.notificationEnabled) {
+            // 用户关闭了通知 → 立即移除前台通知（Service 继续后台运行）
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                stopForeground(Service.STOP_FOREGROUND_DETACH)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        }
 
         catchUpRecovery()
         handler.post(secondRunnable)
@@ -172,6 +186,22 @@ class QuotaService : Service() {
         overlayManager.floatBallShowVideoOnly = enabled
     }
 
+    /** 运行时更新暂停期间悬浮球显示（由 SettingsActivity 调用） */
+    fun updatePauseShowFloatBall(enabled: Boolean) {
+        quotaStore.pauseShowFloatBall = enabled
+        overlayManager.floatBallPauseShow = enabled
+    }
+
+    /** 运行时更新通知栏显示开关（由 SettingsActivity 调用） */
+    fun updateNotificationEnabled(enabled: Boolean) {
+        quotaStore.notificationEnabled = enabled
+        if (enabled) {
+            startForeground(AppMeta.NOTIFICATION_ID, buildNotification())
+        } else {
+            stopForegroundCompat()
+        }
+    }
+
     /** 运行时更新宽限时长（由 MainActivity 设置弹窗调用） */
     fun updateGraceDurationSec(sec: Long) {
         quotaStore.graceDurationSec = sec
@@ -184,7 +214,8 @@ class QuotaService : Service() {
 
     private fun catchUpRecovery() {
         val now = System.currentTimeMillis()
-        val recovered = engine.catchUpRecovery(quotaStore.lastTickTime, now)
+        val rates = RateConfig.fromStore(quotaStore)
+        val recovered = engine.catchUpRecovery(quotaStore.lastTickTime, now, rates = rates)
         if (recovered <= 0) return
 
         val newQuota = (quotaStore.quota + recovered).coerceAtMost(Constants.QUOTA_MAX)
@@ -287,7 +318,22 @@ class QuotaService : Service() {
     }
 
     private fun updateNotification() {
-        notificationManager.notify(AppMeta.NOTIFICATION_ID, buildNotification())
+        if (quotaStore.notificationEnabled) {
+            startForeground(AppMeta.NOTIFICATION_ID, buildNotification())
+        } else {
+            // 关闭后每 tick 主动取消通知，防止 MIUI 等 OEM 自动恢复
+            stopForegroundCompat()
+        }
+    }
+
+    /** 兼容各 SDK 版本的 stopForeground */
+    private fun stopForegroundCompat() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            stopForeground(Service.STOP_FOREGROUND_DETACH)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
     }
 
     /** 暂停状态变化时由 PauseReceiver 触发，刷新 UI */
@@ -303,7 +349,9 @@ class QuotaService : Service() {
                 isWatching = false,
                 inGracePeriod = false,
                 isShortVideoApp = false,
-                isPaused = true
+                isPaused = true,
+                pauseRemainingSeconds = quotaStore.getPauseRemainingSeconds(),
+                pauseDurationSec = quotaStore.pauseDurationSec
             )
         } else if (quotaStore.isInGracePeriod()) {
             overlayManager.update(

@@ -96,7 +96,17 @@ class MainActivity : AppCompatActivity() {
         // !!! 必须先设置点击事件，再判断是否返回 !!!
         // 设置按钮 → 设置弹窗
         btnSettings.setOnClickListener {
-            showSettingsDialog()
+            startActivity(Intent(this, com.ttp.pause.ui.SettingsActivity::class.java))
+        }
+
+        // 点击剩余额度 5 次唤起调试模式
+        var quotaLabelClickCount = 0
+        dashboardQuotaLabel.setOnClickListener {
+            quotaLabelClickCount++
+            if (quotaLabelClickCount >= 5) {
+                quotaLabelClickCount = 0
+                startActivity(Intent(this, com.ttp.pause.ui.DebugActivity::class.java))
+            }
         }
         btnStart.setOnClickListener {
             handler.removeCallbacks(demoAnim)

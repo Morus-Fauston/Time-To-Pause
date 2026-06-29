@@ -5,7 +5,7 @@ package com.ttp.pause.config
  */
 object AppMeta {
     /** APK 版本名 */
-    const val VERSION_NAME = "0.3.1.revised.2"
+    const val VERSION_NAME = "0.3.2.revised.3"
 
     const val DIAG_TAG = "TTP-Diag"
     const val DIAG_RING_BUFFER_SIZE = 3600

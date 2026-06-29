@@ -40,6 +40,9 @@ class OverlayManager(private val context: Context) {
     /** 悬浮球是否仅在看短视频时显示，由 QuotaService 设置 */
     var floatBallShowVideoOnly: Boolean = true
 
+    /** 暂停期间是否显示悬浮球，由 QuotaService 设置 */
+    var floatBallPauseShow: Boolean = false
+
     /** 宽限总时长（秒），由 QuotaService 设置 */
     var graceDurationSec: Long = Constants.GRACE_DURATION_SEC
 
@@ -60,7 +63,9 @@ class OverlayManager(private val context: Context) {
         inGracePeriod: Boolean,
         graceRemainingSeconds: Long = 0L,
         isShortVideoApp: Boolean = true,
-        isPaused: Boolean = false
+        isPaused: Boolean = false,
+        pauseRemainingSeconds: Long = 0L,
+        pauseDurationSec: Long = 0L
     ) {
         val state = OverlayPolicy.evaluate(
             quota = quota,
@@ -68,17 +73,40 @@ class OverlayManager(private val context: Context) {
             inGracePeriod = inGracePeriod,
             floatBallShowVideoOnly = floatBallShowVideoOnly,
             isShortVideoApp = isShortVideoApp,
-            isPaused = isPaused
+            isPaused = isPaused,
+            pauseShowFloatBall = floatBallPauseShow
         )
-        applyState(state, quota, graceRemainingSeconds)
+        applyState(state, quota, graceRemainingSeconds, isPaused, pauseRemainingSeconds, pauseDurationSec)
     }
 
     /** 将 OverlayState 应用到 WindowManager（纯渲染，无决策逻辑） */
-    private fun applyState(state: OverlayState, quota: Int, graceRemainingSeconds: Long = 0L) {
+    private fun applyState(
+        state: OverlayState,
+        quota: Int,
+        graceRemainingSeconds: Long = 0L,
+        isPaused: Boolean = false,
+        pauseRemainingSeconds: Long = 0L,
+        pauseDurationSec: Long = 0L
+    ) {
         if (state.inGracePeriod) {
             hideInterventionOverlay()
             ensureFloatBall(quota)
             floatBall?.setCountdownMode(graceRemainingSeconds, graceDurationSec)
+            return
+        }
+
+        if (state.isPaused) {
+            hideInterventionOverlay()
+            if (state.showFloatBall) {
+                ensureFloatBall(quota)
+                if (pauseDurationSec > 0) {
+                    floatBall?.setCountdownMode(pauseRemainingSeconds, pauseDurationSec)
+                } else {
+                    floatBall?.setNormalMode(quota)
+                }
+            } else {
+                removeFloatBall()
+            }
             return
         }
 

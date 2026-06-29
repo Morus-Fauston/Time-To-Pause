@@ -14,4 +14,6 @@
     <color name="overlay_mold">#D9F0EBE0</color>
     <color name="white">#FFFFFF</color>
     <color name="black">#000000</color>
+    <color name="day_time">#B3E0F2</color>
+    <color name="night_time">#D1C4E9</color>
 </resources>
